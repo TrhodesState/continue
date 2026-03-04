@@ -282,18 +282,89 @@ class Anthropic extends BaseLLM {
 
     if (stream === false) {
       const json = await response.json();
-      const cost = json.usage
-        ? {
-            inputTokens: json.usage.input_tokens,
-            outputTokens: json.usage.output_tokens,
-            totalTokens: json.usage.input_tokens + json.usage.output_tokens,
+      const cost =
+        json.usage && typeof json.usage === "object"
+          ? {
+              inputTokens: json.usage.input_tokens,
+              outputTokens: json.usage.output_tokens,
+              totalTokens: json.usage.input_tokens + json.usage.output_tokens,
+            }
+          : undefined;
+
+      const usage: Usage | undefined =
+        json.usage && typeof json.usage === "object"
+          ? {
+              promptTokens: json.usage.input_tokens ?? 0,
+              completionTokens: json.usage.output_tokens ?? 0,
+              promptTokensDetails: {
+                cachedTokens: json.usage.cache_read_input_tokens ?? 0,
+                cacheWriteTokens: json.usage.cache_creation_input_tokens ?? 0,
+              },
+            }
+          : undefined;
+
+      const blocks = Array.isArray(json.content) ? json.content : [];
+      for (const block of blocks) {
+        if (!block || typeof block !== "object") {
+          continue;
+        }
+        if (block.type === "text" && typeof block.text === "string") {
+          if (block.text.length > 0) {
+            yield {
+              role: "assistant",
+              content: block.text,
+            };
           }
-        : {};
-      yield {
-        role: "assistant",
-        content: json.content[0].text,
-        ...(Object.keys(cost).length > 0 ? { cost } : {}),
-      };
+          continue;
+        }
+        if (block.type === "thinking") {
+          yield {
+            role: "thinking",
+            content: typeof block.thinking === "string" ? block.thinking : "",
+            signature:
+              typeof block.signature === "string" ? block.signature : undefined,
+          };
+          continue;
+        }
+        if (block.type === "redacted_thinking") {
+          yield {
+            role: "thinking",
+            content: "",
+            redactedThinking:
+              typeof block.data === "string" ? block.data : undefined,
+          };
+          continue;
+        }
+        if (block.type === "tool_use") {
+          const input =
+            typeof block.input === "string"
+              ? block.input
+              : JSON.stringify(block.input ?? {});
+          yield {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: block.id,
+                type: "function",
+                function: {
+                  name: block.name,
+                  arguments: input,
+                },
+              },
+            ],
+          };
+        }
+      }
+
+      if (usage || cost) {
+        yield {
+          role: "assistant",
+          content: "",
+          ...(usage ? { usage } : {}),
+          ...(cost ? { cost } : {}),
+        };
+      }
       return;
     }
 

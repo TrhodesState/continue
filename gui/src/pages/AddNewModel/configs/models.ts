@@ -1331,6 +1331,19 @@ export const models: { [key: string]: ModelPackage } = {
     icon: "openai.png",
     isOpenSource: false,
   },
+  codex53: {
+    title: "Codex 5.3",
+    description:
+      "OpenAI's Codex 5.3 model optimized for coding and tool-driven workflows.",
+    params: {
+      model: "codex-5.3",
+      contextLength: 400_000,
+      title: "Codex 5.3",
+    },
+    providerOptions: ["openai"],
+    icon: "openai.png",
+    isOpenSource: false,
+  },
   gpt4turbo: {
     title: "GPT-4 Turbo",
     description:

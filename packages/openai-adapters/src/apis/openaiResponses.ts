@@ -35,9 +35,97 @@ import {
 } from "openai/resources/responses/responses.js";
 
 const RESPONSES_MODEL_REGEX = /^(?:gpt-5|gpt-5-codex|o[0-9])/i;
+const DEFAULT_CODEX_RESPONSES_ALIASES = [
+  "codex-5.3",
+  "codex-5-3",
+  "codex-5.3-preview",
+];
+const OFFICIAL_OPENAI_API_BASE = "https://api.openai.com/v1/";
 
-export function isResponsesModel(model: string): boolean {
-  return !!model && RESPONSES_MODEL_REGEX.test(model);
+export type ApiDialect =
+  | "openai-chat"
+  | "openai-responses"
+  | "anthropic-messages";
+
+export function isResponsesModel(
+  model: string,
+  aliases: string[] = DEFAULT_CODEX_RESPONSES_ALIASES,
+): boolean {
+  if (!model) {
+    return false;
+  }
+  if (RESPONSES_MODEL_REGEX.test(model)) {
+    return true;
+  }
+
+  const normalizedModel = normalizeModelName(model);
+  return aliases
+    .map((alias) => normalizeModelName(alias))
+    .filter(Boolean)
+    .some((alias) => matchesModelAlias(normalizedModel, alias));
+}
+
+export function resolveApiDialect(options: {
+  model: string;
+  apiBase?: string;
+  supportsResponsesApi?: boolean;
+  responsesModelAliases?: string[];
+}): ApiDialect {
+  const model = options.model ?? "";
+  const normalizedModel = normalizeModelName(model);
+
+  if (
+    normalizedModel.includes("claude") ||
+    normalizedModel.startsWith("anthropic/")
+  ) {
+    return "anthropic-messages";
+  }
+
+  const supportsResponses = options.supportsResponsesApi !== false;
+  if (
+    supportsResponses &&
+    isOfficialOpenAIApiBase(options.apiBase) &&
+    isResponsesModel(model, options.responsesModelAliases)
+  ) {
+    return "openai-responses";
+  }
+
+  return "openai-chat";
+}
+
+function normalizeModelName(model: string): string {
+  return model.trim().toLowerCase();
+}
+
+function matchesModelAlias(model: string, alias: string): boolean {
+  if (!alias) {
+    return false;
+  }
+  return (
+    model === alias ||
+    model.startsWith(`${alias}-`) ||
+    model.startsWith(`${alias}.`) ||
+    model.startsWith(`${alias}:`)
+  );
+}
+
+function normalizeApiBase(apiBase: string): string {
+  try {
+    const url = new URL(apiBase);
+    const pathname = url.pathname.endsWith("/")
+      ? url.pathname
+      : `${url.pathname}/`;
+    return `${url.origin}${pathname}`.toLowerCase();
+  } catch {
+    return (apiBase.endsWith("/") ? apiBase : `${apiBase}/`).toLowerCase();
+  }
+}
+
+function isOfficialOpenAIApiBase(apiBase?: string): boolean {
+  return (
+    normalizeApiBase(apiBase ?? OFFICIAL_OPENAI_API_BASE) ===
+    normalizeApiBase(OFFICIAL_OPENAI_API_BASE)
+  );
 }
 
 function convertTextPart(text: string): ResponseInputText {
@@ -589,8 +677,25 @@ export function fromResponsesChunk(
       const item = event.item;
       if (item.type === "message") {
         state.messages.set(item.id, { content: "", refusal: null });
+        return buildChunk(state, {
+          responsesOutputItemId: item.id,
+          responsesOutputItemType: "message",
+          responsesMessageItemIds: [item.id],
+        } as any);
       } else if (item.type === "function_call") {
-        upsertToolCallState(state, item, event.output_index);
+        const toolCallState = upsertToolCallState(
+          state,
+          item,
+          event.output_index,
+        );
+        return buildChunk(state, {
+          responsesOutputItemId: item.id,
+          responsesOutputItemType: "function_call",
+          responsesFunctionCallItemIds: [item.id],
+          responsesToolCallItemIdsByCallId: {
+            [toolCallState.callId]: item.id,
+          },
+        } as any);
       }
       return undefined;
     }
@@ -723,9 +828,15 @@ export function responseToChatCompletion(response: Response): ChatCompletion {
   const messageContent: string[] = [];
   let refusal: string | null = null;
   const toolCalls: ChatCompletion["choices"][0]["message"]["tool_calls"] = [];
+  const responsesMessageItemIds: string[] = [];
+  const responsesFunctionCallItemIds: string[] = [];
+  const responsesToolCallItemIdsByCallId: Record<string, string> = {};
 
   response.output.forEach((item) => {
     if (item.type === "message") {
+      if (typeof item.id === "string") {
+        responsesMessageItemIds.push(item.id);
+      }
       item.content.forEach((contentPart) => {
         if (contentPart.type === "output_text") {
           messageContent.push(contentPart.text);
@@ -734,8 +845,15 @@ export function responseToChatCompletion(response: Response): ChatCompletion {
         }
       });
     } else if (item.type === "function_call") {
+      const callId = item.call_id ?? item.id;
+      if (typeof item.id === "string") {
+        responsesFunctionCallItemIds.push(item.id);
+      }
+      if (typeof callId === "string" && typeof item.id === "string") {
+        responsesToolCallItemIdsByCallId[callId] = item.id;
+      }
       toolCalls.push({
-        id: item.call_id ?? item.id,
+        id: callId,
         type: "function",
         function: {
           name: item.name,
@@ -749,12 +867,33 @@ export function responseToChatCompletion(response: Response): ChatCompletion {
     finishReason = "tool_calls";
   }
 
-  const message = {
+  const responsesOutputItemId =
+    responsesFunctionCallItemIds[responsesFunctionCallItemIds.length - 1] ??
+    responsesMessageItemIds[responsesMessageItemIds.length - 1];
+
+  const message: any = {
     role: "assistant" as const,
     content: messageContent.length ? messageContent.join("") : null,
     refusal,
     tool_calls: toolCalls.length ? toolCalls : undefined,
   };
+
+  if (responsesOutputItemId) {
+    message.responsesOutputItemId = responsesOutputItemId;
+    message.responsesOutputItemType =
+      responsesFunctionCallItemIds.length > 0 ? "function_call" : "message";
+  }
+  if (responsesMessageItemIds.length > 0) {
+    message.responsesMessageItemIds = responsesMessageItemIds;
+  }
+  if (responsesFunctionCallItemIds.length > 0) {
+    message.responsesFunctionCallItemIds = responsesFunctionCallItemIds;
+    // Backwards-compatibility: responsesOutputItemIds has historically held function_call IDs.
+    message.responsesOutputItemIds = responsesFunctionCallItemIds;
+  }
+  if (Object.keys(responsesToolCallItemIdsByCallId).length > 0) {
+    message.responsesToolCallItemIdsByCallId = responsesToolCallItemIdsByCallId;
+  }
 
   const chatCompletion: ChatCompletion = {
     id: response.id,

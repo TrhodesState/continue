@@ -68,3 +68,42 @@ They are concerned with:
 - [x] xAI
 - [x] Fireworks
 - [x] Moonshot
+
+## API Dialect Routing
+
+OpenAI-compatible adapters now route requests through one shared dialect decision:
+
+- `openai-chat`: standard OpenAI chat/completions endpoint
+- `openai-responses`: OpenAI Responses endpoint (for GPT-5/o-series/Codex aliases on official OpenAI API)
+- `anthropic-messages`: Anthropic Messages API format
+
+This same routing helper is used by the adapter and by CLI retry/backoff code.
+
+## Codex Responses Aliases
+
+OpenAI configs can optionally pass `responsesModelAliases` to treat extra model IDs as Responses models.
+
+Example:
+
+```json
+{
+  "provider": "openai",
+  "apiKey": "sk-...",
+  "model": "codex-5.3",
+  "responsesModelAliases": ["codex-5.3", "codex-5-3-preview"]
+}
+```
+
+Default Codex aliases include:
+
+- `codex-5.3`
+- `codex-5-3`
+- `codex-5.3-preview`
+
+## Regression Matrix
+
+Current regression tests cover:
+
+- Codex Responses streaming + non-streaming roundtrips
+- Opus Messages streaming + non-streaming translation parity
+- Parallel tool-call metadata passthrough and call ID mapping

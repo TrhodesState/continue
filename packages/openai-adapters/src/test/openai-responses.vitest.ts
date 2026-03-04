@@ -158,6 +158,73 @@ describe("toResponsesInput", () => {
       },
     ]);
   });
+
+  it("preserves multi-turn function_call -> function_call_output roundtrips", () => {
+    const messages: ChatCompletionMessageParam[] = [
+      { role: "user", content: "Read src/a.ts then summarize." },
+      {
+        role: "assistant",
+        content: "I will inspect that file.",
+        tool_calls: [
+          {
+            id: "call_read_a",
+            type: "function",
+            function: {
+              name: "read_file",
+              arguments: '{"path":"src/a.ts"}',
+            },
+          },
+        ],
+      } as ChatCompletionAssistantMessageParam,
+      {
+        role: "tool",
+        tool_call_id: "call_read_a",
+        content: "export const value = 1;",
+      },
+      {
+        role: "assistant",
+        content: "Found one export. I will now inspect src/b.ts.",
+        tool_calls: [
+          {
+            id: "call_read_b",
+            type: "function",
+            function: {
+              name: "read_file",
+              arguments: '{"path":"src/b.ts"}',
+            },
+          },
+        ],
+      } as ChatCompletionAssistantMessageParam,
+      {
+        role: "tool",
+        tool_call_id: "call_read_b",
+        content: "export const other = 2;",
+      },
+      {
+        role: "assistant",
+        content: "Summary: both files export one constant.",
+      },
+    ];
+
+    const inputItems = toResponsesInput(messages);
+    const functionCalls = inputItems.filter(
+      (item: any) => item.type === "function_call",
+    ) as any[];
+    const functionOutputs = inputItems.filter(
+      (item: any) => item.type === "function_call_output",
+    ) as any[];
+
+    expect(functionCalls).toHaveLength(2);
+    expect(functionCalls.map((item) => item.call_id)).toEqual([
+      "call_read_a",
+      "call_read_b",
+    ]);
+    expect(functionOutputs).toHaveLength(2);
+    expect(functionOutputs.map((item) => item.call_id)).toEqual([
+      "call_read_a",
+      "call_read_b",
+    ]);
+  });
 });
 
 it("omits function_call id when tool call id lacks fc_ prefix", () => {
@@ -288,8 +355,17 @@ describe("fromResponsesChunk", () => {
       completed,
     ]);
 
-    expect(chunks[0].choices[0].delta.content).toBe("Hello");
-    expect(chunks[1].choices[0].delta.content).toBe(" world");
+    const contentDeltas = chunks
+      .map((chunk) => chunk.choices[0]?.delta?.content)
+      .filter((delta): delta is string => typeof delta === "string");
+    expect(contentDeltas).toEqual(["Hello", " world"]);
+    const metadataChunk = chunks.find(
+      (chunk) =>
+        (chunk.choices[0]?.delta as any)?.responsesOutputItemId === "msg_1",
+    );
+    expect(
+      (metadataChunk?.choices[0]?.delta as any)?.responsesOutputItemType,
+    ).toBe("message");
     const finishChunk = chunks.find(
       (chunk) => chunk.choices[0].finish_reason !== null,
     );
@@ -359,14 +435,134 @@ describe("fromResponsesChunk", () => {
       toolOutputDone,
     ]);
 
-    expect(chunks[0].choices[0].delta.tool_calls?.[0].function?.arguments).toBe(
-      '{"query":"vit',
+    const toolArgDeltas = chunks
+      .map(
+        (chunk) => chunk.choices[0].delta.tool_calls?.[0].function?.arguments,
+      )
+      .filter((delta): delta is string => typeof delta === "string");
+    expect(toolArgDeltas).toEqual(['{"query":"vit', 'est"}']);
+    const metadataChunk = chunks.find(
+      (chunk) =>
+        (chunk.choices[0].delta as any)?.responsesOutputItemId ===
+        "tool_item_1",
     );
-    expect(chunks[1].choices[0].delta.tool_calls?.[0].function?.arguments).toBe(
-      'est"}',
-    );
+    expect(
+      (metadataChunk?.choices[0].delta as any)?.responsesToolCallItemIdsByCallId
+        ?.call_99,
+    ).toBe("tool_item_1");
     const toolFinish = chunks[chunks.length - 1];
     expect(toolFinish.choices[0].finish_reason).toBe("tool_calls");
+  });
+
+  it("handles interleaved response.output_item.added and text/tool deltas for parallel calls", () => {
+    const messageAdded: ResponseOutputItemAddedEvent = {
+      type: "response.output_item.added",
+      sequence_number: 1,
+      output_index: 0,
+      item: {
+        id: "msg_interleaved",
+        type: "message",
+        role: "assistant",
+        content: [],
+      } as any,
+    };
+    const textA: ResponseTextDeltaEvent = {
+      type: "response.output_text.delta",
+      sequence_number: 2,
+      item_id: "msg_interleaved",
+      output_index: 0,
+      content_index: 0,
+      delta: "Planning ",
+      logprobs: [],
+    };
+    const firstToolAdded: ResponseOutputItemAddedEvent = {
+      type: "response.output_item.added",
+      sequence_number: 3,
+      output_index: 1,
+      item: {
+        id: "fc_item_1",
+        type: "function_call",
+        call_id: "call_alpha",
+        name: "read_file",
+        arguments: "",
+        status: "in_progress",
+      } as any,
+    };
+    const textB: ResponseTextDeltaEvent = {
+      type: "response.output_text.delta",
+      sequence_number: 4,
+      item_id: "msg_interleaved",
+      output_index: 0,
+      content_index: 0,
+      delta: "while calling tools.",
+      logprobs: [],
+    };
+    const firstToolArgs: ResponseFunctionCallArgumentsDeltaEvent = {
+      type: "response.function_call_arguments.delta",
+      sequence_number: 5,
+      item_id: "fc_item_1",
+      output_index: 1,
+      delta: '{"path":"a.ts"}',
+    };
+    const secondToolAdded: ResponseOutputItemAddedEvent = {
+      type: "response.output_item.added",
+      sequence_number: 6,
+      output_index: 2,
+      item: {
+        id: "fc_item_2",
+        type: "function_call",
+        call_id: "call_beta",
+        name: "read_file",
+        arguments: "",
+        status: "in_progress",
+      } as any,
+    };
+    const secondToolArgs: ResponseFunctionCallArgumentsDeltaEvent = {
+      type: "response.function_call_arguments.delta",
+      sequence_number: 7,
+      item_id: "fc_item_2",
+      output_index: 2,
+      delta: '{"path":"b.ts"}',
+    };
+    const firstToolDone: ResponseOutputItemDoneEvent = {
+      type: "response.output_item.done",
+      sequence_number: 8,
+      output_index: 1,
+      item: {
+        id: "fc_item_1",
+        type: "function_call",
+        call_id: "call_alpha",
+        name: "read_file",
+        arguments: '{"path":"a.ts"}',
+        status: "completed",
+      } as any,
+    };
+
+    const chunks = collectChunks([
+      messageAdded,
+      textA,
+      firstToolAdded,
+      textB,
+      firstToolArgs,
+      secondToolAdded,
+      secondToolArgs,
+      firstToolDone,
+    ]);
+
+    expect(
+      chunks.map((chunk) => chunk.choices[0]?.delta?.content ?? "").join(""),
+    ).toBe("Planning while calling tools.");
+    expect(
+      chunks
+        .map(
+          (chunk) =>
+            chunk.choices[0]?.delta?.tool_calls?.[0]?.function?.arguments ?? "",
+        )
+        .filter(Boolean),
+    ).toEqual(['{"path":"a.ts"}', '{"path":"b.ts"}']);
+    expect(
+      chunks.some((chunk) => chunk.choices[0].finish_reason === "tool_calls"),
+    ).toBe(true);
   });
 
   it("emits reasoning deltas when reasoning items stream", () => {
@@ -477,6 +673,17 @@ describe("responseToChatCompletion", () => {
         },
       },
     ]);
+    expect((result.choices[0].message as any).responsesOutputItemId).toBe(
+      "tool_item_final",
+    );
+    expect(
+      (result.choices[0].message as any).responsesFunctionCallItemIds,
+    ).toEqual(["tool_item_final"]);
+    expect(
+      (result.choices[0].message as any).responsesToolCallItemIdsByCallId,
+    ).toEqual({
+      call_final: "tool_item_final",
+    });
     expect(result.choices[0].finish_reason).toBe("tool_calls");
     expect(result.usage).toEqual({
       prompt_tokens: 100,

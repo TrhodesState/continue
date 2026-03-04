@@ -234,5 +234,5 @@ export {
   getAnthropicMediaTypeFromDataUrl,
 } from "./apis/AnthropicUtils.js";
 
-export { isResponsesModel } from "./apis/openaiResponses.js";
+export { isResponsesModel, resolveApiDialect } from "./apis/openaiResponses.js";
 export { extractBase64FromDataUrl, parseDataUrl } from "./util/url.js";

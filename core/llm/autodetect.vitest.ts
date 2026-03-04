@@ -1,5 +1,10 @@
 import { describe, expect, it, test } from "vitest";
-import { autodetectTemplateType, modelSupportsNextEdit } from "./autodetect";
+import {
+  autodetectTemplateType,
+  llmCanGenerateInParallel,
+  modelSupportsNextEdit,
+  modelSupportsReasoning,
+} from "./autodetect";
 
 test("autodetectTemplateType returns 'codellama-70b' for CodeLlama 70B models", () => {
   expect(autodetectTemplateType("codellama-70b")).toBe("codellama-70b");
@@ -23,6 +28,8 @@ test("autodetectTemplateType returns undefined for models that don't need templa
   expect(autodetectTemplateType("moonshot-v1")).toBe(undefined);
   expect(autodetectTemplateType("mercury-chat")).toBe(undefined);
   expect(autodetectTemplateType("mercury-chat")).toBe(undefined);
+  expect(autodetectTemplateType("codex-5.3")).toBe(undefined);
+  expect(autodetectTemplateType("codex-5-3-preview")).toBe(undefined);
   expect(autodetectTemplateType("o3-mini")).toBe(undefined);
   expect(autodetectTemplateType("o4")).toBe(undefined);
   expect(autodetectTemplateType("claude-sonnet-4-20250514")).toBe("none");
@@ -335,5 +342,35 @@ describe("modelSupportsNextEdit", () => {
         ),
       ).toBe(true);
     });
+  });
+});
+
+describe("llmCanGenerateInParallel", () => {
+  it("returns true for OpenAI GPT models", () => {
+    expect(llmCanGenerateInParallel("openai", "gpt-5")).toBe(true);
+  });
+
+  it("returns true for OpenAI Codex responses models", () => {
+    expect(llmCanGenerateInParallel("openai", "codex-5.3")).toBe(true);
+  });
+
+  it("returns true for OpenAI o-series models", () => {
+    expect(llmCanGenerateInParallel("openai", "o3")).toBe(true);
+  });
+
+  it("returns false for unsupported OpenAI legacy models", () => {
+    expect(llmCanGenerateInParallel("openai", "text-davinci-003")).toBe(false);
+  });
+});
+
+describe("modelSupportsReasoning", () => {
+  it("returns true for codex responses aliases", () => {
+    expect(modelSupportsReasoning({ model: "codex-5.3" } as any)).toBe(true);
+  });
+
+  it("returns true for claude opus 4.6 models", () => {
+    expect(modelSupportsReasoning({ model: "claude-opus-4-6" } as any)).toBe(
+      true,
+    );
   });
 });

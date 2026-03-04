@@ -386,6 +386,156 @@ describe("processStreamingResponse - content preservation", () => {
     expect(result.shouldContinue).toBe(true);
   });
 
+  it("routes codex responses streams with fragmented tool args, usage chunk, and tool finish", async () => {
+    const codexChunks: ChatCompletionChunk[] = [
+      {
+        id: "resp_codex",
+        object: "chat.completion.chunk",
+        created: Date.now(),
+        model: "codex-5.3",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "resp_codex",
+        object: "chat.completion.chunk",
+        created: Date.now(),
+        model: "codex-5.3",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Working on it..." },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "resp_codex",
+        object: "chat.completion.chunk",
+        created: Date.now(),
+        model: "codex-5.3",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_codex_1",
+                  type: "function",
+                  function: {
+                    name: "read_file",
+                    arguments: '{"path":"REA',
+                  },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "resp_codex",
+        object: "chat.completion.chunk",
+        created: Date.now(),
+        model: "codex-5.3",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  type: "function",
+                  function: {
+                    arguments: 'DME.md"}',
+                  },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "resp_codex",
+        object: "chat.completion.chunk",
+        created: Date.now(),
+        model: "codex-5.3",
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+      {
+        id: "resp_codex",
+        object: "chat.completion.chunk",
+        created: Date.now(),
+        model: "codex-5.3",
+        choices: [],
+        usage: {
+          prompt_tokens: 70,
+          completion_tokens: 20,
+          total_tokens: 90,
+          prompt_tokens_details: {
+            cached_tokens: 12,
+          },
+        },
+      },
+    ];
+
+    const responsesStream = vi.fn().mockImplementation(async function* () {
+      for (const chunk of codexChunks) {
+        yield chunk;
+      }
+    });
+    const chatCompletionStream = vi.fn().mockImplementation(async function* () {
+      throw new Error("chatCompletionStream should not be used for codex-5.3");
+    });
+
+    mockLlmApi = {
+      responsesStream,
+      chatCompletionStream,
+    } as unknown as BaseLlmApi;
+
+    mockModel = {
+      model: "codex-5.3",
+      provider: "openai",
+    } as unknown as ModelConfig;
+
+    const result = await processStreamingResponse({
+      chatHistory,
+      model: mockModel,
+      llmApi: mockLlmApi,
+      abortController: mockAbortController,
+      systemMessage: "You are a helpful assistant.",
+    });
+
+    expect(responsesStream).toHaveBeenCalledTimes(1);
+    expect(chatCompletionStream).not.toHaveBeenCalled();
+    expect(result.content).toBe("Working on it...");
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]).toMatchObject({
+      id: "call_codex_1",
+      name: "read_file",
+      arguments: { path: "README.md" },
+    });
+    expect(result.shouldContinue).toBe(true);
+    expect(result.usage).toMatchObject({
+      prompt_tokens: 70,
+      completion_tokens: 20,
+      total_tokens: 90,
+    });
+  });
+
   it("handles provider that only sends tool ID in first chunk then uses index", async () => {
     chunks = [
       contentChunk("I'll read the README.md file for you and then say hello!"),

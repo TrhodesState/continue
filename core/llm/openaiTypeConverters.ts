@@ -1,5 +1,11 @@
 import { FimCreateParamsStreaming } from "@continuedev/openai-adapters/dist/apis/base";
 import {
+  createResponsesStreamState as createAdapterResponsesStreamState,
+  fromResponsesChunk as fromAdapterResponsesChunk,
+  responseToChatCompletion,
+} from "@continuedev/openai-adapters/dist/apis/openaiResponses";
+import type { ResponsesStreamState as AdapterResponsesStreamState } from "@continuedev/openai-adapters/dist/apis/openaiResponses";
+import {
   ChatCompletion,
   ChatCompletionAssistantMessageParam,
   ChatCompletionChunk,
@@ -18,16 +24,10 @@ import type {
   ResponseOutputMessage,
   ResponseOutputText,
   ResponseReasoningItem,
-  ResponseReasoningSummaryTextDeltaEvent,
-  ResponseReasoningSummaryTextDoneEvent,
-  ResponseReasoningTextDeltaEvent,
-  ResponseReasoningTextDoneEvent,
   ResponseStreamEvent,
-  ResponseTextDeltaEvent,
 } from "openai/resources/responses/responses.mjs";
 
 import {
-  AssistantChatMessage,
   ChatMessage,
   CompletionOptions,
   MessageContent,
@@ -274,6 +274,101 @@ export function toFimBody(
   } as any;
 }
 
+type ResponsesOutputMetadata = {
+  responsesOutputItemId?: string;
+  responsesOutputItemType?: "message" | "function_call";
+  responsesOutputItemIds?: string[];
+  responsesMessageItemIds?: string[];
+  responsesFunctionCallItemIds?: string[];
+  responsesToolCallItemIdsByCallId?: Record<string, string>;
+};
+
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const filtered = value.filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+  );
+  return filtered.length > 0 ? filtered : undefined;
+}
+
+function normalizeCallIdMap(
+  value: unknown,
+): Record<string, string> | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([callId, itemId]) =>
+      typeof callId === "string" &&
+      callId.length > 0 &&
+      typeof itemId === "string" &&
+      itemId.length > 0,
+  ) as [string, string][];
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(entries);
+}
+
+function extractResponsesOutputMetadata(
+  source: unknown,
+): ResponsesOutputMetadata | undefined {
+  if (!source || typeof source !== "object") {
+    return undefined;
+  }
+
+  const candidate = source as Record<string, unknown>;
+  const responsesOutputItemId =
+    typeof candidate.responsesOutputItemId === "string" &&
+    candidate.responsesOutputItemId.length > 0
+      ? candidate.responsesOutputItemId
+      : undefined;
+  const responsesOutputItemType =
+    candidate.responsesOutputItemType === "message" ||
+    candidate.responsesOutputItemType === "function_call"
+      ? candidate.responsesOutputItemType
+      : undefined;
+  const responsesOutputItemIds = normalizeStringArray(
+    candidate.responsesOutputItemIds,
+  );
+  const responsesMessageItemIds = normalizeStringArray(
+    candidate.responsesMessageItemIds,
+  );
+  const responsesFunctionCallItemIds = normalizeStringArray(
+    candidate.responsesFunctionCallItemIds,
+  );
+  const responsesToolCallItemIdsByCallId = normalizeCallIdMap(
+    candidate.responsesToolCallItemIdsByCallId,
+  );
+
+  if (
+    !responsesOutputItemId &&
+    !responsesOutputItemType &&
+    !responsesOutputItemIds &&
+    !responsesMessageItemIds &&
+    !responsesFunctionCallItemIds &&
+    !responsesToolCallItemIdsByCallId
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(responsesOutputItemId ? { responsesOutputItemId } : {}),
+    ...(responsesOutputItemType ? { responsesOutputItemType } : {}),
+    ...(responsesOutputItemIds ? { responsesOutputItemIds } : {}),
+    ...(responsesMessageItemIds ? { responsesMessageItemIds } : {}),
+    ...(responsesFunctionCallItemIds ? { responsesFunctionCallItemIds } : {}),
+    ...(responsesToolCallItemIdsByCallId
+      ? { responsesToolCallItemIdsByCallId }
+      : {}),
+  };
+}
+
 export function fromChatResponse(response: ChatCompletion): ChatMessage[] {
   const messages: ChatMessage[] = [];
   const message = response.choices[0].message as ChatCompletionMessage & {
@@ -284,6 +379,7 @@ export function fromChatResponse(response: ChatCompletion): ChatMessage[] {
       [key: string]: any;
     }[];
   };
+  const responsesMetadata = extractResponsesOutputMetadata(message as any);
 
   // Check for reasoning content first (similar to fromChatCompletionChunk)
   if (message.reasoning_content || message.reasoning) {
@@ -320,11 +416,13 @@ export function fromChatResponse(response: ChatCompletion): ChatMessage[] {
             arguments: (tc as any).function?.arguments,
           },
         })),
+      metadata: responsesMetadata,
     });
   } else {
     messages.push({
       role: "assistant",
       content: message.content ?? "",
+      metadata: responsesMetadata,
     });
   }
 
@@ -343,11 +441,13 @@ export function fromChatCompletionChunk(
         }[];
       })
     | undefined;
+  const responsesMetadata = extractResponsesOutputMetadata(delta as any);
 
   if (delta?.content) {
     return {
       role: "assistant",
       content: delta.content,
+      metadata: responsesMetadata,
     };
   } else if (delta?.tool_calls) {
     const toolCalls = delta?.tool_calls
@@ -366,6 +466,7 @@ export function fromChatCompletionChunk(
         role: "assistant",
         content: "",
         toolCalls,
+        metadata: responsesMetadata,
       };
     }
   } else if (
@@ -382,335 +483,44 @@ export function fromChatCompletionChunk(
     return message;
   }
 
-  return undefined;
-}
-
-function handleTextDeltaEvent(
-  e: ResponseTextDeltaEvent,
-): ChatMessage | undefined {
-  return e.delta ? { role: "assistant", content: e.delta } : undefined;
-}
-
-function handleFunctionCallArgsDelta(e: any): ChatMessage | undefined {
-  const ev: any = e as any;
-  const item = ev.item || {};
-  const name = item && typeof item.name === "string" ? item.name : undefined;
-  const argDelta =
-    typeof ev.delta === "string"
-      ? ev.delta
-      : (ev.delta?.arguments ?? ev.arguments);
-  if (typeof argDelta === "string" && argDelta.length > 0) {
-    const call_id =
-      (item?.call_id as string | undefined) ||
-      (item?.id as string | undefined) ||
-      "";
-    const toolCalls: ToolCallDelta[] = [
-      {
-        id: call_id,
-        type: "function",
-        function: { name: name || "", arguments: argDelta },
-      },
-    ];
-    const assistant: AssistantChatMessage = {
-      role: "assistant",
-      content: "",
-      toolCalls,
-    };
-    return assistant;
-  }
-  return undefined;
-}
-
-function handleOutputItemAdded(
-  e: ResponseStreamEvent,
-): ChatMessage | undefined {
-  const item = (e as any).item as {
-    type?: string;
-    id?: string;
-    name?: string;
-    arguments?: string;
-    call_id?: string;
-    summary?: Array<{ type: string; text: string }>;
-    encrypted_content?: string;
-  };
-  if (!item || !item.type) return undefined;
-  if (item.type === "reasoning") {
-    const details: Array<{ [k: string]: unknown }> = [];
-    if (item.id) details.push({ type: "reasoning_id", id: item.id });
-    if (typeof item.encrypted_content === "string" && item.encrypted_content) {
-      details.push({
-        type: "encrypted_content",
-        encrypted_content: item.encrypted_content,
-      });
-    }
-    if (Array.isArray(item.summary)) {
-      for (const part of item.summary) {
-        if (part?.type === "summary_text" && typeof part.text === "string") {
-          details.push({ type: "summary_text", text: part.text });
-        }
-      }
-    }
-    const thinking: ThinkingChatMessage = {
-      role: "thinking",
-      content: "",
-      reasoning_details: details,
-      metadata: {
-        reasoningId: item.id as string,
-        encrypted_content: item.encrypted_content as string | undefined,
-      },
-    };
-    return thinking;
-  }
-  if (item.type === "message" && typeof item.id === "string") {
+  if (responsesMetadata) {
     return {
       role: "assistant",
       content: "",
-      metadata: { responsesOutputItemId: item.id },
+      metadata: responsesMetadata,
     };
   }
-  if (item.type === "function_call" && typeof item.id === "string") {
-    const name = item.name as string | undefined;
-    const args = typeof item.arguments === "string" ? item.arguments : "";
-    const call_id = item.call_id as string | undefined;
-    const toolCalls: ToolCallDelta[] = name
-      ? [
-          {
-            id: call_id || (item.id as string),
-            type: "function",
-            function: { name, arguments: args },
-          },
-        ]
-      : [];
-    const assistant: AssistantChatMessage = {
-      role: "assistant",
-      content: "",
-      toolCalls,
-      metadata: { responsesOutputItemId: item.id as string },
-    };
-    return assistant;
-  }
-  return undefined;
-}
-
-function handleReasoningSummaryDelta(
-  e: ResponseReasoningSummaryTextDeltaEvent,
-): ChatMessage | undefined {
-  const details: Array<{ [k: string]: unknown }> = [
-    { type: "summary_text", text: e.delta },
-  ];
-  if ((e as any).item_id)
-    details.push({ type: "reasoning_id", id: (e as any).item_id });
-  const thinking: ThinkingChatMessage = {
-    role: "thinking",
-    content: e.delta,
-    reasoning_details: details,
-  };
-  return thinking;
-}
-
-function handleReasoningSummaryDone(
-  e: ResponseReasoningSummaryTextDoneEvent,
-): ChatMessage | undefined {
-  const details: Array<{ [k: string]: unknown }> = [];
-  if (e.text) details.push({ type: "summary_text", text: e.text });
-  if ((e as any).item_id)
-    details.push({ type: "reasoning_id", id: (e as any).item_id });
-  const thinking: ThinkingChatMessage = {
-    role: "thinking",
-    content: e.text,
-    reasoning_details: details,
-  };
-  return thinking;
-}
-
-function handleReasoningTextDelta(
-  e: ResponseReasoningTextDeltaEvent,
-): ChatMessage | undefined {
-  const details: Array<{ [k: string]: unknown }> = [
-    { type: "reasoning_text", text: e.delta },
-  ];
-  if ((e as any).item_id)
-    details.push({ type: "reasoning_id", id: (e as any).item_id });
-  const thinking: ThinkingChatMessage = {
-    role: "thinking",
-    content: e.delta,
-    reasoning_details: details,
-  };
-  return thinking;
-}
-
-function handleReasoningTextDone(
-  e: ResponseReasoningTextDoneEvent,
-): ChatMessage | undefined {
-  const details: Array<{ [k: string]: unknown }> = [];
-  if (e.text) details.push({ type: "reasoning_text", text: e.text });
-  if ((e as any).item_id)
-    details.push({ type: "reasoning_id", id: (e as any).item_id });
-  const thinking: ThinkingChatMessage = {
-    role: "thinking",
-    content: e.text,
-    reasoning_details: details,
-  };
-  return thinking;
-}
-
-function handleResponsesStreamEvent(
-  e: ResponseStreamEvent,
-): ChatMessage | undefined {
-  const t = (e as any).type as string;
-  if (t === "response.output_text.delta") {
-    return handleTextDeltaEvent(e as ResponseTextDeltaEvent);
-  }
-  if (t === "response.output_text.done") {
-    return undefined; // avoid duplicate final text
-  }
-  if (t === "response.function_call_arguments.delta") {
-    return handleFunctionCallArgsDelta(e);
-  }
-  if (t === "response.function_call_arguments.done") {
-    return undefined;
-  }
-  if (t === "response.output_item.added") {
-    return handleOutputItemAdded(e);
-  }
-  if (t === "response.reasoning_summary_text.delta") {
-    return handleReasoningSummaryDelta(
-      e as ResponseReasoningSummaryTextDeltaEvent,
-    );
-  }
-  if (t === "response.reasoning_summary_text.done") {
-    return handleReasoningSummaryDone(
-      e as ResponseReasoningSummaryTextDoneEvent,
-    );
-  }
-  if (t === "response.reasoning_text.delta") {
-    return handleReasoningTextDelta(e as ResponseReasoningTextDeltaEvent);
-  }
-  if (t === "response.reasoning_text.done") {
-    return handleReasoningTextDone(e as ResponseReasoningTextDoneEvent);
-  }
-  return undefined;
-}
-
-function handleResponsesFinal(
-  resp: OpenAIResponse,
-): ChatMessage | ChatMessage[] | undefined {
-  // Prefer structured output items when present
-  if (Array.isArray(resp.output) && resp.output.length > 0) {
-    const result: ChatMessage[] = [];
-    for (const raw of resp.output as any[]) {
-      const item = raw as any;
-      if (!item || typeof item !== "object") continue;
-      if (item.type === "reasoning") {
-        const details: Array<{ [k: string]: unknown }> = [];
-        if (typeof item.id === "string") {
-          details.push({ type: "reasoning_id", id: item.id });
-        }
-        if (Array.isArray(item.summary)) {
-          for (const s of item.summary) {
-            if (s?.type === "summary_text" && typeof s.text === "string") {
-              details.push({ type: "summary_text", text: s.text });
-            }
-          }
-        }
-        if (Array.isArray(item.content)) {
-          for (const c of item.content) {
-            if (c?.type === "reasoning_text" && typeof c.text === "string") {
-              details.push({ type: "reasoning_text", text: c.text });
-            }
-          }
-        }
-        if (
-          typeof item.encrypted_content === "string" &&
-          item.encrypted_content
-        ) {
-          details.push({
-            type: "encrypted_content",
-            encrypted_content: item.encrypted_content,
-          });
-        }
-        const thinking: ThinkingChatMessage = {
-          role: "thinking",
-          content: "",
-          reasoning_details: details,
-          metadata: {
-            reasoningId: item.id as string,
-            encrypted_content: item.encrypted_content as string | undefined,
-          },
-        };
-        result.push(thinking);
-        continue;
-      }
-      if (item.type === "message") {
-        let text = "";
-        if (Array.isArray(item.content)) {
-          text = (item.content as any[])
-            .map((c) => (typeof c?.text === "string" ? c.text : ""))
-            .join("");
-        } else if (typeof item.content === "string") {
-          text = item.content;
-        }
-        const assistant: AssistantChatMessage = {
-          role: "assistant",
-          content: text || "",
-          metadata:
-            typeof item.id === "string"
-              ? { responsesOutputItemId: item.id }
-              : undefined,
-        };
-        result.push(assistant);
-        continue;
-      }
-      if (item.type === "function_call") {
-        const name = item.name as string | undefined;
-        const args =
-          typeof item.arguments === "string"
-            ? item.arguments
-            : JSON.stringify(item.arguments ?? "");
-        const call_id =
-          (item.call_id as string | undefined) ||
-          (item.id as string | undefined) ||
-          "";
-        const toolCalls: ToolCallDelta[] = name
-          ? [
-              {
-                id: call_id,
-                type: "function",
-                function: { name, arguments: args || "" },
-              },
-            ]
-          : [];
-        const assistant: AssistantChatMessage = {
-          role: "assistant",
-          content: "",
-          toolCalls,
-          metadata:
-            typeof item.id === "string"
-              ? { responsesOutputItemId: item.id }
-              : undefined,
-        };
-        result.push(assistant);
-        continue;
-      }
-    }
-    if (result.length > 0) return result;
-  }
-
-  // Fallback to output_text when no structured output is present
-  if (typeof resp.output_text === "string" && resp.output_text.length > 0) {
-    return { role: "assistant", content: resp.output_text };
-  }
 
   return undefined;
 }
+
+export type ResponsesChunkState = AdapterResponsesStreamState;
+
+export function createResponsesChunkState(model = ""): ResponsesChunkState {
+  return createAdapterResponsesStreamState({ model });
+}
+
+function isResponsesStreamEvent(event: unknown): event is ResponseStreamEvent {
+  const eventType = (event as any)?.type;
+  return (
+    typeof eventType === "string" &&
+    (eventType === "error" || eventType.startsWith("response."))
+  );
+}
+
+const defaultResponsesChunkState = createResponsesChunkState();
 
 export function fromResponsesChunk(
   event: ResponseStreamEvent | OpenAIResponse,
+  state: ResponsesChunkState = defaultResponsesChunkState,
 ): ChatMessage | ChatMessage[] | undefined {
-  if (typeof (event as any).type === "string") {
-    return handleResponsesStreamEvent(event as ResponseStreamEvent);
+  if (isResponsesStreamEvent(event)) {
+    const chunk = fromAdapterResponsesChunk(state, event);
+    return chunk ? fromChatCompletionChunk(chunk) : undefined;
   }
-  return handleResponsesFinal(event as OpenAIResponse);
+
+  const completion = responseToChatCompletion(event as any);
+  return fromChatResponse(completion as any);
 }
 
 export function mergeReasoningDetails(
@@ -788,32 +598,69 @@ function toResponseInputContentList(
  * Emits function_call items for each tool call that has a corresponding fc_ ID.
  * Extracted to reduce cyclomatic complexity in toResponsesInput.
  */
+function isResponsesFunctionCallItemId(itemId: string | undefined): boolean {
+  return typeof itemId === "string" && itemId.startsWith("fc_");
+}
+
 function emitFunctionCallsFromToolCalls(
   toolCalls: ToolCallDelta[],
-  respIds: string[],
+  options: {
+    orderedItemIds?: string[];
+    itemIdByCallId?: Record<string, string>;
+  },
   input: ResponseInput,
-): void {
+): number {
+  const orderedFunctionCallIds = (options.orderedItemIds ?? []).filter(
+    (id): id is string => isResponsesFunctionCallItemId(id),
+  );
+  const itemIdByCallId = options.itemIdByCallId ?? {};
+  const usedFunctionCallItemIds = new Set<string>();
+  let orderedIndex = 0;
+  let emittedCount = 0;
+
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i];
-    const fcId = respIds[i];
-
-    if (!fcId) continue; // Skip if no fc_ ID for this tool call
-
+    const callId = tc?.id as string | undefined;
     const name = tc?.function?.name as string | undefined;
     const args = tc?.function?.arguments as string | undefined;
-    const call_id = tc?.id as string | undefined;
 
-    if (name && call_id) {
-      const functionCallItem: ResponseFunctionToolCall = {
-        id: fcId,
-        type: "function_call",
-        name,
-        arguments: typeof args === "string" ? args : "{}",
-        call_id,
-      };
-      input.push(functionCallItem);
+    if (!name || !callId) {
+      continue;
     }
+
+    // Strict pairing by call_id when available.
+    let functionCallItemId = itemIdByCallId[callId];
+
+    // Fallback for legacy metadata: use ordered list of function_call item IDs.
+    if (!isResponsesFunctionCallItemId(functionCallItemId)) {
+      while (
+        orderedIndex < orderedFunctionCallIds.length &&
+        usedFunctionCallItemIds.has(orderedFunctionCallIds[orderedIndex])
+      ) {
+        orderedIndex++;
+      }
+      functionCallItemId = orderedFunctionCallIds[orderedIndex];
+      orderedIndex++;
+    }
+
+    if (!isResponsesFunctionCallItemId(functionCallItemId)) {
+      continue;
+    }
+
+    usedFunctionCallItemIds.add(functionCallItemId);
+
+    const functionCallItem: ResponseFunctionToolCall = {
+      id: functionCallItemId,
+      type: "function_call",
+      name,
+      arguments: typeof args === "string" ? args : "{}",
+      call_id: callId,
+    };
+    input.push(functionCallItem);
+    emittedCount++;
   }
+
+  return emittedCount;
 }
 
 /**
@@ -911,26 +758,32 @@ export function toResponsesInput(messages: ChatMessage[]): ResponseInput {
           | string
           | undefined;
         const toolCalls = msg.toolCalls as ToolCallDelta[] | undefined;
-        // Get array of fc_ IDs for parallel tool calls, fallback to single respId
-        // NOTE: responsesOutputItemIds is accumulated in sessionSlice.ts during streaming.
-        // We rely on OpenAI streaming events arriving in order, so respIds[i] corresponds
-        // to toolCalls[i] by position. See: https://platform.openai.com/docs/guides/function-calling
-        const respIds =
+        const itemIdByCallId = (msg.metadata
+          ?.responsesToolCallItemIdsByCallId ?? {}) as Record<string, string>;
+        const orderedFunctionCallIds =
+          (msg.metadata?.responsesFunctionCallItemIds as
+            | string[]
+            | undefined) ||
           (msg.metadata?.responsesOutputItemIds as string[] | undefined) ||
           (respId ? [respId] : []);
 
-        if (
-          Array.isArray(toolCalls) &&
-          toolCalls.length > 0 &&
-          respIds.length > 0
-        ) {
-          // Emit function_call for EACH tool call (supports parallel tool calls)
-          emitFunctionCallsFromToolCalls(toolCalls, respIds, input);
+        if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+          // Emit function_call for each tool call with strict call_id pairing when possible.
+          const emittedFunctionCalls = emitFunctionCallsFromToolCalls(
+            toolCalls,
+            { orderedItemIds: orderedFunctionCallIds, itemIdByCallId },
+            input,
+          );
+
           // Also emit text content if present alongside tool calls
           if (text && text.trim()) {
             pushMessage("assistant", text);
           }
-        } else if (respId) {
+          // If no IDs were available, preserve the assistant text path (legacy compatibility).
+          if (emittedFunctionCalls === 0 && !text.trim()) {
+            pushMessage("assistant", "");
+          }
+        } else if (respId && !isResponsesFunctionCallItemId(respId)) {
           // Emit full assistant output message item
           const outputMessageItem: ResponseOutputMessage = {
             id: respId,

@@ -329,6 +329,78 @@ export class AnthropicApi implements BaseLlmApi {
     const completion = await response.json();
 
     const usage: Record<string, number> | undefined = completion.usage;
+    const contentBlocks = Array.isArray(completion.content)
+      ? completion.content
+      : [];
+    const toolCalls: NonNullable<
+      ChatCompletion["choices"][0]["message"]["tool_calls"]
+    > = [];
+    const reasoningDetails: Record<string, unknown>[] = [];
+    let reasoningContent = "";
+    let content = "";
+
+    for (const block of contentBlocks) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      if (block.type === "text" && typeof block.text === "string") {
+        content += block.text;
+        continue;
+      }
+      if (block.type === "tool_use") {
+        toolCalls.push({
+          id: block.id,
+          type: "function",
+          function: {
+            name: block.name,
+            arguments:
+              typeof block.input === "string"
+                ? block.input
+                : JSON.stringify(block.input ?? {}),
+          },
+        });
+        continue;
+      }
+      if (block.type === "thinking") {
+        if (typeof block.thinking === "string") {
+          reasoningContent += block.thinking;
+        }
+        if (typeof block.signature === "string" && block.signature.length > 0) {
+          reasoningDetails.push({ signature: block.signature });
+        }
+        continue;
+      }
+      if (block.type === "redacted_thinking") {
+        if (typeof block.data === "string" && block.data.length > 0) {
+          reasoningDetails.push({
+            type: "redacted_thinking",
+            data: block.data,
+          });
+        }
+      }
+    }
+
+    const stopReason = completion.stop_reason as string | null | undefined;
+    const finishReason =
+      stopReason === "tool_use" || toolCalls.length > 0
+        ? "tool_calls"
+        : stopReason === "max_tokens"
+          ? "length"
+          : "stop";
+
+    const message: any = {
+      role: "assistant",
+      content: content || null,
+      refusal: null,
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+    };
+    if (reasoningContent.length > 0) {
+      message.reasoning_content = reasoningContent;
+    }
+    if (reasoningDetails.length > 0) {
+      message.reasoning_details = reasoningDetails;
+    }
+
     return {
       id: completion.id,
       object: "chat.completion",
@@ -347,12 +419,8 @@ export class AnthropicApi implements BaseLlmApi {
       choices: [
         {
           logprobs: null,
-          finish_reason: "stop",
-          message: {
-            role: "assistant",
-            content: completion.content[0].text,
-            refusal: null,
-          },
+          finish_reason: finishReason,
+          message,
           index: 0,
         },
       ],
@@ -378,6 +446,20 @@ export class AnthropicApi implements BaseLlmApi {
           if (blockStartEvent.content_block.type === "tool_use") {
             lastToolUseId = blockStartEvent.content_block.id;
             lastToolUseName = blockStartEvent.content_block.name;
+          } else if (
+            blockStartEvent.content_block.type === "redacted_thinking"
+          ) {
+            yield chatChunkFromDelta({
+              model,
+              delta: {
+                reasoning_details: [
+                  {
+                    type: "redacted_thinking",
+                    data: blockStartEvent.content_block.data,
+                  },
+                ],
+              } as any,
+            });
           }
           break;
         case "message_start":
@@ -404,6 +486,26 @@ export class AnthropicApi implements BaseLlmApi {
               yield chatChunk({
                 content: blockDeltaEvent.delta.text,
                 model,
+              });
+              break;
+            case "thinking_delta":
+              yield chatChunkFromDelta({
+                model,
+                delta: {
+                  reasoning_content: blockDeltaEvent.delta.thinking,
+                } as any,
+              });
+              break;
+            case "signature_delta":
+              yield chatChunkFromDelta({
+                model,
+                delta: {
+                  reasoning_details: [
+                    {
+                      signature: blockDeltaEvent.delta.signature,
+                    },
+                  ],
+                } as any,
               });
               break;
             case "input_json_delta":

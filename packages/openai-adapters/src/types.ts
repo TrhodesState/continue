@@ -61,6 +61,7 @@ export const OpenAIConfigSchema = BasePlusConfig.extend({
     z.literal("relace"),
     z.literal("huggingface-inference-api"),
   ]),
+  responsesModelAliases: z.array(z.string()).optional(),
 });
 export type OpenAIConfig = z.infer<typeof OpenAIConfigSchema>;
 

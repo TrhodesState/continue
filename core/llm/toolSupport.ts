@@ -14,9 +14,17 @@ export const PROVIDER_TOOL_SUPPORT: Record<string, (model: string) => boolean> =
         }
       } catch (e) {}
 
-      return ["claude", "gpt-4", "o3", "gemini", "gemma"].some((part) =>
-        model.toLowerCase().startsWith(part),
-      );
+      return [
+        "claude",
+        "gpt-4",
+        "gpt-5",
+        "codex",
+        "o1",
+        "o3",
+        "o4",
+        "gemini",
+        "gemma",
+      ].some((part) => model.toLowerCase().startsWith(part));
     },
     anthropic: (model) => {
       if (model.includes("claude-2") || model.includes("claude-instant")) {

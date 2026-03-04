@@ -39,6 +39,11 @@ describe("PROVIDER_TOOL_SUPPORT", () => {
       expect(supportsFn("ownerSlug/packageSlug/openai/o3-preview")).toBe(true);
     });
 
+    it("should return true for Codex 5.3 and GPT-5 Codex models", () => {
+      expect(supportsFn("codex-5.3")).toBe(true);
+      expect(supportsFn("gpt-5-codex")).toBe(true);
+    });
+
     it("should return true for Gemini models", () => {
       expect(supportsFn("ownerSlug/packageSlug/gemini/gemini-pro")).toBe(true);
       expect(supportsFn("ownerSlug/packageSlug/gemini/gemini-2.5-pro")).toBe(
@@ -79,6 +84,10 @@ describe("PROVIDER_TOOL_SUPPORT", () => {
       expect(supportsFn("claude-3.7-sonnet")).toBe(true);
     });
 
+    it("should return true for Claude Opus 4.6 models", () => {
+      expect(supportsFn("claude-opus-4-6")).toBe(true);
+    });
+
     it("should return undefined for unsupported models", () => {
       expect(supportsFn("claude-2")).toBe(false);
       expect(supportsFn("claude-instant")).toBe(false);
@@ -102,6 +111,11 @@ describe("PROVIDER_TOOL_SUPPORT", () => {
     it("should return true for O3 models", () => {
       expect(supportsFn("o3")).toBe(true);
       expect(supportsFn("o3-preview")).toBe(true);
+    });
+
+    it("should return true for Codex models", () => {
+      expect(supportsFn("gpt-5-codex")).toBe(true);
+      expect(supportsFn("codex-5.3")).toBe(true);
     });
 
     it("should return true for Gemma models", () => {

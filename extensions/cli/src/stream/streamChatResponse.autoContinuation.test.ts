@@ -203,7 +203,7 @@ describe("streamChatResponse - auto-continuation after compaction", () => {
     expect(callCount).toBeGreaterThan(1);
   });
 
-  it("should not auto-continue if compaction occurs with tool calls pending", async () => {
+  it("should not auto-continue if compaction occurs with parallel tool calls pending", async () => {
     const { services } = await import("../services/index.js");
     const { handleNormalAutoCompaction } = await import(
       "./streamChatResponse.compactionHelpers.js"
@@ -250,6 +250,15 @@ describe("streamChatResponse - auto-continuation after compaction", () => {
                     function: {
                       name: "ReadFile",
                       arguments: '{"filepath": "/test"}',
+                    },
+                  },
+                  {
+                    index: 1,
+                    id: "call_456",
+                    type: "function",
+                    function: {
+                      name: "SearchRepo",
+                      arguments: '{"query": "README"}',
                     },
                   },
                 ],

@@ -1,4 +1,8 @@
-import { toResponsesInput } from "./openaiTypeConverters";
+import {
+  fromChatCompletionChunk,
+  fromChatResponse,
+  toResponsesInput,
+} from "./openaiTypeConverters";
 import { ChatMessage } from "..";
 import type { ResponseInputItem } from "openai/resources/responses/responses.mjs";
 
@@ -48,6 +52,95 @@ function getMessagesByRole(
 }
 
 describe("openaiTypeConverters", () => {
+  describe("responses metadata passthrough", () => {
+    it("preserves Responses output item metadata from streaming chat chunks", () => {
+      const chunk = {
+        id: "resp_1",
+        object: "chat.completion.chunk",
+        created: 1710000000,
+        model: "codex-5.3",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              responsesOutputItemId: "fc_123",
+              responsesOutputItemType: "function_call",
+              responsesFunctionCallItemIds: ["fc_123"],
+              responsesToolCallItemIdsByCallId: {
+                call_123: "fc_123",
+              },
+            },
+            finish_reason: null,
+            logprobs: null,
+          },
+        ],
+      } as any;
+
+      const msg = fromChatCompletionChunk(chunk);
+      expect(msg).toMatchObject({
+        role: "assistant",
+        content: "",
+        metadata: {
+          responsesOutputItemId: "fc_123",
+          responsesOutputItemType: "function_call",
+          responsesFunctionCallItemIds: ["fc_123"],
+          responsesToolCallItemIdsByCallId: {
+            call_123: "fc_123",
+          },
+        },
+      });
+    });
+
+    it("preserves Responses output item metadata from non-stream chat responses", () => {
+      const response = {
+        id: "chatcmpl_1",
+        object: "chat.completion",
+        created: 1710000000,
+        model: "codex-5.3",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "tool_calls",
+            logprobs: null,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_123",
+                  type: "function",
+                  function: {
+                    name: "read_file",
+                    arguments: '{"path":"a.ts"}',
+                  },
+                },
+              ],
+              responsesOutputItemId: "fc_123",
+              responsesOutputItemType: "function_call",
+              responsesFunctionCallItemIds: ["fc_123"],
+              responsesToolCallItemIdsByCallId: {
+                call_123: "fc_123",
+              },
+            },
+          },
+        ],
+      } as any;
+
+      const messages = fromChatResponse(response);
+      expect(messages[0]).toMatchObject({
+        role: "assistant",
+        metadata: {
+          responsesOutputItemId: "fc_123",
+          responsesOutputItemType: "function_call",
+          responsesFunctionCallItemIds: ["fc_123"],
+          responsesToolCallItemIdsByCallId: {
+            call_123: "fc_123",
+          },
+        },
+      });
+    });
+  });
+
   describe("toResponsesInput", () => {
     describe("tool calls handling - OpenAI Responses API", () => {
       it("should emit function_call items when fc_ ID is in metadata", () => {
@@ -366,6 +459,102 @@ describe("openaiTypeConverters", () => {
 
       const functionOutputs = getFunctionCallOutputs(result);
       expect(functionOutputs.length).toBe(3);
+    });
+
+    it("should pair function_call item IDs strictly by call_id when call-id map metadata is present", () => {
+      const messages: ChatMessage[] = [
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call_alpha",
+              type: "function",
+              function: {
+                name: "read_file",
+                arguments: '{"path":"alpha.ts"}',
+              },
+            },
+            {
+              id: "call_beta",
+              type: "function",
+              function: {
+                name: "read_file",
+                arguments: '{"path":"beta.ts"}',
+              },
+            },
+          ],
+          metadata: {
+            // Intentionally out-of-order array, should not be used for strict pairing.
+            responsesOutputItemIds: ["fc_beta", "fc_alpha"],
+            // New strict map keyed by call_id
+            responsesToolCallItemIdsByCallId: {
+              call_alpha: "fc_alpha",
+              call_beta: "fc_beta",
+            },
+          },
+        } as ChatMessage,
+      ];
+
+      const result = toResponsesInput(messages);
+      const functionCalls = getFunctionCalls(result);
+      expect(functionCalls.length).toBe(2);
+
+      expect(functionCalls).toEqual([
+        expect.objectContaining({
+          id: "fc_alpha",
+          call_id: "call_alpha",
+          name: "read_file",
+        }),
+        expect.objectContaining({
+          id: "fc_beta",
+          call_id: "call_beta",
+          name: "read_file",
+        }),
+      ]);
+    });
+
+    it("should ignore interleaved message item IDs in responsesOutputItemIds accumulation", () => {
+      const messages: ChatMessage[] = [
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call_001",
+              type: "function",
+              function: {
+                name: "read_file",
+                arguments: '{"path":"first.ts"}',
+              },
+            },
+            {
+              id: "call_002",
+              type: "function",
+              function: {
+                name: "read_file",
+                arguments: '{"path":"second.ts"}',
+              },
+            },
+          ],
+          metadata: {
+            // Regression shape: message + function IDs got accumulated together.
+            responsesOutputItemIds: ["msg_001", "fc_001", "msg_002", "fc_002"],
+          },
+        } as ChatMessage,
+      ];
+
+      const result = toResponsesInput(messages);
+      const functionCalls = getFunctionCalls(result);
+      expect(functionCalls.length).toBe(2);
+      expect(functionCalls[0]).toMatchObject({
+        id: "fc_001",
+        call_id: "call_001",
+      });
+      expect(functionCalls[1]).toMatchObject({
+        id: "fc_002",
+        call_id: "call_002",
+      });
     });
 
     describe("edge cases", () => {

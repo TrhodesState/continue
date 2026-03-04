@@ -157,6 +157,7 @@ export const providers: Partial<Record<string, ProviderInfo>> = {
       models.gpt5,
       models.gpt5Mini,
       models.gpt5Codex,
+      models.codex53,
       models.gpt41,
       models.gpt41Mini,
       models.codexMini,

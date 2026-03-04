@@ -195,6 +195,77 @@ export function handleStreamingToolCallUpdates(
   }
 }
 
+function pushUniqueMetadataId(
+  metadata: Record<string, unknown>,
+  key: string,
+  value: string,
+): void {
+  if (!value) {
+    return;
+  }
+  const current = metadata[key];
+  const values = Array.isArray(current) ? current : [];
+  if (!values.includes(value)) {
+    metadata[key] = [...values, value];
+  }
+}
+
+function mergeResponsesOutputMetadata(
+  currentAssistantMessage: AssistantChatMessage,
+  incomingAssistantMessage: AssistantChatMessage,
+): void {
+  const outputItemId = incomingAssistantMessage.metadata
+    ?.responsesOutputItemId as string | undefined;
+  if (!outputItemId) {
+    return;
+  }
+
+  const metadata =
+    (currentAssistantMessage.metadata as Record<string, unknown>) || {};
+  const outputItemType = incomingAssistantMessage.metadata
+    ?.responsesOutputItemType as string | undefined;
+  const isFunctionCallItem =
+    outputItemType === "function_call" ||
+    outputItemId.startsWith("fc_") ||
+    !!incomingAssistantMessage.toolCalls?.length;
+
+  if (isFunctionCallItem) {
+    pushUniqueMetadataId(
+      metadata,
+      "responsesFunctionCallItemIds",
+      outputItemId,
+    );
+    metadata.responsesOutputItemIds = [
+      ...((metadata.responsesFunctionCallItemIds as string[] | undefined) ??
+        []),
+    ];
+  } else {
+    pushUniqueMetadataId(metadata, "responsesMessageItemIds", outputItemId);
+  }
+
+  const existingMap = (metadata.responsesToolCallItemIdsByCallId ??
+    {}) as Record<string, string>;
+  const incomingMap = incomingAssistantMessage.metadata
+    ?.responsesToolCallItemIdsByCallId as Record<string, string> | undefined;
+  metadata.responsesToolCallItemIdsByCallId = {
+    ...existingMap,
+    ...(incomingMap ?? {}),
+  };
+
+  if (isFunctionCallItem && incomingAssistantMessage.toolCalls?.length) {
+    for (const toolCall of incomingAssistantMessage.toolCalls) {
+      if (toolCall.id) {
+        (metadata.responsesToolCallItemIdsByCallId as Record<string, string>)[
+          toolCall.id
+        ] = outputItemId;
+      }
+    }
+  }
+
+  metadata.responsesOutputItemId = outputItemId;
+  currentAssistantMessage.metadata = metadata;
+}
+
 // We need this to handle reorderings (e.g. a mid-array deletion) of the messages array.
 // The proper fix is adding a UUID to all chat messages, but this is the temp workaround.
 export type ChatHistoryItemWithMessageId = ChatHistoryItem & {
@@ -658,17 +729,10 @@ export const sessionSlice = createSlice({
             lastMessage.role === "assistant" &&
             message.metadata?.responsesOutputItemId
           ) {
-            lastMessage.metadata = lastMessage.metadata || {};
-            // Accumulate fc_ IDs for parallel tool calls (OpenAI Responses API)
-            if (!lastMessage.metadata.responsesOutputItemIds) {
-              lastMessage.metadata.responsesOutputItemIds = [];
-            }
-            (lastMessage.metadata.responsesOutputItemIds as string[]).push(
-              message.metadata.responsesOutputItemId as string,
+            mergeResponsesOutputMetadata(
+              lastMessage as AssistantChatMessage,
+              message as AssistantChatMessage,
             );
-            // Also keep singular for backwards compatibility
-            lastMessage.metadata.responsesOutputItemId = message.metadata
-              .responsesOutputItemId as string;
           }
 
           if (

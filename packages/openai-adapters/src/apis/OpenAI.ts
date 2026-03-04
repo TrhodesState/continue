@@ -27,7 +27,7 @@ import {
 import {
   createResponsesStreamState,
   fromResponsesChunk,
-  isResponsesModel,
+  resolveApiDialect,
   responseToChatCompletion,
   toResponsesParams,
 } from "./openaiResponses.js";
@@ -78,8 +78,13 @@ export class OpenAIApi implements BaseLlmApi {
   }
 
   protected shouldUseResponsesEndpoint(model: string): boolean {
-    const isOfficialOpenAIAPI = this.apiBase === "https://api.openai.com/v1/";
-    return isOfficialOpenAIAPI && isResponsesModel(model);
+    const dialect = resolveApiDialect({
+      model,
+      apiBase: this.apiBase,
+      supportsResponsesApi: true,
+      responsesModelAliases: this.config.responsesModelAliases,
+    });
+    return dialect === "openai-responses";
   }
 
   modifyCompletionBody<

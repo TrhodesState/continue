@@ -1,4 +1,4 @@
-import { BaseLlmApi, isResponsesModel } from "@continuedev/openai-adapters";
+import { BaseLlmApi, resolveApiDialect } from "@continuedev/openai-adapters";
 import type { ChatCompletionCreateParamsStreaming } from "openai/resources.mjs";
 
 import { error, warn } from "../logging.js";
@@ -182,11 +182,17 @@ export async function chatCompletionStreamWithBackoff(
         throw new Error("Request aborted");
       }
 
-      const useResponses =
-        typeof llmApi.responsesStream === "function" &&
-        isResponsesModel(params.model);
+      const dialect = resolveApiDialect({
+        model: params.model,
+        apiBase: (llmApi as any).apiBase,
+        supportsResponsesApi: typeof llmApi.responsesStream === "function",
+        responsesModelAliases: (llmApi as any).config?.responsesModelAliases,
+      });
 
-      if (useResponses) {
+      if (
+        dialect === "openai-responses" &&
+        typeof llmApi.responsesStream === "function"
+      ) {
         return llmApi.responsesStream!(params, abortSignal);
       }
 

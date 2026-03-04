@@ -189,6 +189,7 @@ function modelSupportsReasoning(
   if (!model) {
     return false;
   }
+  const lowerModel = model.model.toLowerCase();
   if (model.completionOptions?.reasoning !== undefined) {
     // Reasoning support is forced at the config level. Model might not necessarily support it though!
     return model.completionOptions.reasoning;
@@ -199,29 +200,29 @@ function modelSupportsReasoning(
   // }
   // do not turn reasoning on by default for claude 3 models
   if (
-    model.model.includes("claude") &&
-    !model.model.includes("-3-") &&
-    !model.model.includes("-3.5-")
+    lowerModel.includes("claude") &&
+    !lowerModel.includes("-3-") &&
+    !lowerModel.includes("-3.5-")
   ) {
     return true;
   }
-  if (model.model.includes("command-a-reasoning")) {
+  if (lowerModel.includes("command-a-reasoning")) {
     return true;
   }
-  if (model.model.includes("deepseek-r")) {
+  if (lowerModel.includes("deepseek-r")) {
     return true;
   }
   // o-series reasoning models
-  if (/^o[134]/.test(model.model)) {
+  if (/^o[134]/.test(lowerModel)) {
     return true;
   }
-  if (model.model.includes("codex")) {
+  if (lowerModel.includes("codex")) {
     return true;
   }
-  if (model.model.includes("magistral")) {
+  if (lowerModel.includes("magistral")) {
     return true;
   }
-  if (model.model.includes("grok-4")) {
+  if (lowerModel.includes("grok-4")) {
     return true;
   }
 
@@ -252,7 +253,12 @@ const PARALLEL_PROVIDERS: string[] = [
 
 function llmCanGenerateInParallel(provider: string, model: string): boolean {
   if (provider === "openai") {
-    return model.includes("gpt");
+    const lowerModel = model.toLowerCase();
+    return (
+      lowerModel.includes("gpt") ||
+      lowerModel.includes("codex") ||
+      /^o[134]/.test(lowerModel)
+    );
   }
 
   return PARALLEL_PROVIDERS.includes(provider);
@@ -263,6 +269,7 @@ function isProviderHandlesTemplatingOrNoTemplateTypeRequired(
 ): boolean {
   return (
     modelName.includes("gpt") ||
+    modelName.includes("codex") ||
     modelName.includes("command") ||
     modelName.includes("aya") ||
     modelName.includes("chat-bison") ||

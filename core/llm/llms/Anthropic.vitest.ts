@@ -492,4 +492,205 @@ describe("Anthropic", () => {
       );
     });
   });
+
+  describe("responses parity", () => {
+    test("handleResponse non-stream preserves thinking/signature and tool_use blocks", async () => {
+      const anthropic = new Anthropic({
+        apiKey: "test-api-key",
+        model: "claude-opus-4-6",
+        apiBase: "https://api.anthropic.com/v1/",
+      });
+
+      const response = new Response(
+        JSON.stringify({
+          id: "msg_1",
+          content: [
+            {
+              type: "thinking",
+              thinking: "I should inspect files first.",
+              signature: "sig_non_stream",
+            },
+            {
+              type: "tool_use",
+              id: "toolu_1",
+              name: "read_file",
+              input: { path: "README.md" },
+            },
+            {
+              type: "text",
+              text: "Calling read_file for README.md.",
+            },
+          ],
+          usage: {
+            input_tokens: 15,
+            output_tokens: 7,
+            cache_read_input_tokens: 2,
+            cache_creation_input_tokens: 1,
+          },
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+
+      const chunks: any[] = [];
+      for await (const chunk of anthropic.handleResponse(
+        response as any,
+        false,
+      )) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "thinking",
+            content: "I should inspect files first.",
+            signature: "sig_non_stream",
+          }),
+          expect.objectContaining({
+            role: "assistant",
+            toolCalls: [
+              expect.objectContaining({
+                id: "toolu_1",
+                function: expect.objectContaining({
+                  name: "read_file",
+                  arguments: '{"path":"README.md"}',
+                }),
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            role: "assistant",
+            content: "Calling read_file for README.md.",
+          }),
+          expect.objectContaining({
+            role: "assistant",
+            usage: expect.objectContaining({
+              promptTokens: 15,
+              completionTokens: 7,
+            }),
+          }),
+        ]),
+      );
+    });
+
+    test("handleResponse stream preserves thinking/signature and tool_use deltas", async () => {
+      const anthropic = new Anthropic({
+        apiKey: "test-api-key",
+        model: "claude-opus-4-6",
+        apiBase: "https://api.anthropic.com/v1/",
+      });
+
+      const fetchPackage = await import("@continuedev/fetch");
+      vi.spyOn(fetchPackage, "streamSse").mockImplementation(
+        async function* () {
+          yield {
+            type: "message_start",
+            message: {
+              usage: {
+                input_tokens: 11,
+                cache_read_input_tokens: 3,
+                cache_creation_input_tokens: 0,
+              },
+            },
+          } as any;
+          yield {
+            type: "content_block_delta",
+            delta: {
+              type: "thinking_delta",
+              thinking: "Need to inspect file metadata.",
+            },
+          } as any;
+          yield {
+            type: "content_block_delta",
+            delta: {
+              type: "signature_delta",
+              signature: "sig_stream",
+            },
+          } as any;
+          yield {
+            type: "content_block_start",
+            content_block: {
+              type: "tool_use",
+              id: "toolu_stream",
+              name: "read_file",
+            },
+          } as any;
+          yield {
+            type: "content_block_delta",
+            delta: {
+              type: "input_json_delta",
+              partial_json: '{"path":"README.md"}',
+            },
+          } as any;
+          yield {
+            type: "message_delta",
+            usage: {
+              output_tokens: 9,
+            },
+          } as any;
+          yield {
+            type: "content_block_delta",
+            delta: {
+              type: "text_delta",
+              text: "Running read_file now.",
+            },
+          } as any;
+          yield {
+            type: "content_block_stop",
+          } as any;
+        },
+      );
+      const response = new Response(null, {
+        headers: {
+          "Content-Type": "text/event-stream",
+        },
+      });
+
+      const chunks: any[] = [];
+      for await (const chunk of anthropic.handleResponse(
+        response as any,
+        true,
+      )) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "thinking",
+            content: "Need to inspect file metadata.",
+          }),
+          expect.objectContaining({
+            role: "thinking",
+            signature: "sig_stream",
+          }),
+          expect.objectContaining({
+            role: "assistant",
+            toolCalls: [
+              expect.objectContaining({
+                id: "toolu_stream",
+                function: expect.objectContaining({
+                  name: "read_file",
+                  arguments: '{"path":"README.md"}',
+                }),
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            role: "assistant",
+            content: "Running read_file now.",
+          }),
+          expect.objectContaining({
+            role: "assistant",
+            usage: expect.objectContaining({
+              promptTokens: 11,
+              completionTokens: 9,
+            }),
+          }),
+        ]),
+      );
+    });
+  });
 });
