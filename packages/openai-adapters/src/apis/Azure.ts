@@ -1,13 +1,27 @@
+import { streamSse } from "@continuedev/fetch";
 import { OpenAI } from "openai/index";
 import {
+  ChatCompletion,
   ChatCompletionChunk,
   ChatCompletionCreateParams,
+  ChatCompletionCreateParamsNonStreaming,
   ChatCompletionCreateParamsStreaming,
 } from "openai/resources/index";
+import type {
+  Response as ResponsesApiResponse,
+  ResponseStreamEvent,
+} from "openai/resources/responses/responses.js";
 import { z } from "zod";
 import { AzureConfigSchema } from "../types.js";
 import { customFetch } from "../util.js";
 import { OpenAIApi } from "./OpenAI.js";
+import {
+  createResponsesStreamState,
+  fromResponsesChunk,
+  isResponsesModel,
+  responseToChatCompletion,
+  toResponsesParams,
+} from "./openaiResponses.js";
 
 export class AzureApi extends OpenAIApi {
   constructor(private azureConfig: z.infer<typeof AzureConfigSchema>) {
@@ -78,6 +92,50 @@ export class AzureApi extends OpenAIApi {
     };
   }
 
+  protected shouldUseResponsesEndpoint(model: string): boolean {
+    if (!this._isAzureOpenAI(this.azureConfig.env?.apiType)) {
+      return false;
+    }
+
+    return isResponsesModel(model, this.azureConfig.responsesModelAliases);
+  }
+
+  private _getAzureResponsesEndpoint(): URL {
+    const url = new URL(this.apiBase);
+    const apiVersionFromBase = url.searchParams.get("api-version");
+    const apiVersion = this.azureConfig.env?.apiVersion ?? apiVersionFromBase;
+
+    url.search = "";
+
+    let pathname = url.pathname.replace(/\/+$/, "");
+    // If a deployment-scoped path is provided, normalize back to resource root.
+    pathname = pathname.replace(/\/openai\/deployments\/[^/]+$/i, "");
+
+    if (!/\/openai\/responses$/i.test(pathname)) {
+      pathname =
+        pathname.length > 0
+          ? `${pathname}/openai/responses`
+          : "/openai/responses";
+    }
+    url.pathname = pathname;
+
+    if (apiVersion) {
+      url.searchParams.set("api-version", apiVersion);
+    }
+
+    return url;
+  }
+
+  private _getAzureHeaders(): Record<string, string> {
+    return {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "api-key": this.azureConfig.apiKey ?? "",
+      "x-api-key": this.azureConfig.apiKey ?? "",
+      Authorization: `Bearer ${this.azureConfig.apiKey ?? ""}`,
+    };
+  }
+
   /**
    * Filters out empty text content parts from messages.
    *
@@ -115,10 +173,29 @@ export class AzureApi extends OpenAIApi {
     return modifiedBody;
   }
 
+  async chatCompletionNonStream(
+    body: ChatCompletionCreateParamsNonStreaming,
+    signal: AbortSignal,
+  ): Promise<ChatCompletion> {
+    if (this.shouldUseResponsesEndpoint(body.model)) {
+      const response = await this.responsesNonStream(body, signal);
+      return responseToChatCompletion(response);
+    }
+
+    return super.chatCompletionNonStream(body, signal);
+  }
+
   async *chatCompletionStream(
     body: ChatCompletionCreateParamsStreaming,
     signal: AbortSignal,
   ): AsyncGenerator<ChatCompletionChunk, any, unknown> {
+    if (this.shouldUseResponsesEndpoint(body.model)) {
+      for await (const chunk of this.responsesStream(body, signal)) {
+        yield chunk;
+      }
+      return;
+    }
+
     const response = await this.openai.chat.completions.create(
       this.modifyChatBody(body),
       { signal },
@@ -128,6 +205,68 @@ export class AzureApi extends OpenAIApi {
       // Skip chunks with no choices (common with Azure content filtering)
       if (result.choices && result.choices.length > 0) {
         yield result;
+      }
+    }
+  }
+
+  async responsesNonStream(
+    body: ChatCompletionCreateParamsNonStreaming,
+    signal: AbortSignal,
+  ): Promise<ResponsesApiResponse> {
+    const endpoint = this._getAzureResponsesEndpoint();
+    const params = toResponsesParams({
+      ...(body as ChatCompletionCreateParams),
+      stream: false,
+    });
+
+    const response = await customFetch(this.azureConfig.requestOptions)(
+      endpoint,
+      {
+        method: "POST",
+        headers: this._getAzureHeaders(),
+        body: JSON.stringify(params),
+        signal,
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    return (await response.json()) as ResponsesApiResponse;
+  }
+
+  async *responsesStream(
+    body: ChatCompletionCreateParamsStreaming,
+    signal: AbortSignal,
+  ): AsyncGenerator<ChatCompletionChunk> {
+    const endpoint = this._getAzureResponsesEndpoint();
+    const params = toResponsesParams({
+      ...(body as ChatCompletionCreateParams),
+      stream: true,
+    });
+    const state = createResponsesStreamState({
+      model: body.model,
+    });
+
+    const response = await customFetch(this.azureConfig.requestOptions)(
+      endpoint,
+      {
+        method: "POST",
+        headers: this._getAzureHeaders(),
+        body: JSON.stringify(params),
+        signal,
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    for await (const event of streamSse(response as any)) {
+      const chunk = fromResponsesChunk(state, event as ResponseStreamEvent);
+      if (chunk) {
+        yield chunk;
       }
     }
   }

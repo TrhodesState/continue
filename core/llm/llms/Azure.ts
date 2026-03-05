@@ -10,7 +10,11 @@ class Azure extends OpenAI {
     return false;
   }
 
-  protected useOpenAIAdapterFor: (LlmApiRequestType | "*")[] = [];
+  // Route chat through the adapter so Azure can use Responses API for Codex/GPT-5 models.
+  protected useOpenAIAdapterFor: (LlmApiRequestType | "*")[] = [
+    "chat",
+    "streamChat",
+  ];
 
   static defaultOptions: Partial<LLMOptions> = {
     apiVersion: "2024-02-15-preview",

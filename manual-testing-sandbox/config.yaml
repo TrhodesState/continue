@@ -1,14 +1,16 @@
-AWSTemplateFormatVersion: "2010-09-09"
-Description: Sample CloudFormation template
+name: Local Config
+version: 0.0.1
+schema: v1
 
-Resources:
-  S3Bucket:
-    Type: "AWS::S3::Bucket"
-    Properties:
-      BucketName: my-sample-bucket
-
-  EC2Instance:
-    Type: "AWS::EC2::Instance"
-    Properties:
-      InstanceType: "t2.micro"
-      ImageId: "ami-0abcdef12345abcdef"
+models:
+  - name: GPT-5.3 Codex (Azure)
+    provider: azure
+    model: gpt-5.3-codex
+    apiBase: https://tomr-mlh7ywiq-eastus2.cognitiveservices.azure.com
+    apiKey: ${{ secrets.AZURE_OPENAI_API_KEY }}
+    env:
+      deployment: gpt-5.3-codex
+      apiType: azure-openai
+      apiVersion: "2025-04-01-preview"
+    roles:
+      - chat
