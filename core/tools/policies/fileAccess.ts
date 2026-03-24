@@ -16,11 +16,5 @@ export function evaluateFileAccessPolicy(
     return "disabled";
   }
 
-  // Files within workspace use the base policy (typically "allowedWithoutPermission")
-  if (isWithinWorkspace) {
-    return basePolicy;
-  }
-
-  // Files outside workspace always require permission for security
-  return "allowedWithPermission";
+  return basePolicy;
 }

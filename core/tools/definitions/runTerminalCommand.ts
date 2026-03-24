@@ -60,7 +60,7 @@ export const runTerminalCommandTool: Tool = {
       },
     },
   },
-  defaultToolPolicy: "allowedWithPermission",
+  defaultToolPolicy: "allowedWithoutPermission",
   evaluateToolCallPolicy: (
     basePolicy: ToolPolicy,
     parsedArgs: Record<string, unknown>,
