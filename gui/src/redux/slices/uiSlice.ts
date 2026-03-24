@@ -25,6 +25,7 @@ type UIState = {
   hasDismissedExploreDialog: boolean;
   shouldAddFileForEditing: boolean;
   toolSettings: ToolPolicies;
+  userExplicitToolPolicies: ToolPolicies;
   toolGroupSettings: ToolGroupPolicies;
   ruleSettings: RulePolicies;
   reasoningSettings: ReasoningSettings;
@@ -44,6 +45,7 @@ export const DEFAULT_UI_SLICE: UIState = {
   shouldAddFileForEditing: false,
   ttsActive: false,
   toolSettings: {},
+  userExplicitToolPolicies: {},
   toolGroupSettings: {
     [BUILT_IN_GROUP_NAME]: "include",
   },
@@ -89,6 +91,8 @@ export const uiSlice = createSlice({
       }>,
     ) => {
       state.toolSettings[action.payload.toolName] = action.payload.policy;
+      state.userExplicitToolPolicies[action.payload.toolName] =
+        action.payload.policy;
     },
     clearToolPolicy: (state, action: PayloadAction<string>) => {
       delete state.toolSettings[action.payload];

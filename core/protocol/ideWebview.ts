@@ -84,6 +84,21 @@ export type ToIdeFromWebviewProtocol = ToIdeFromWebviewOrCoreProtocol & {
     },
     void,
   ];
+  "context/pickFile": [
+    undefined,
+    (
+      | {
+          name: string;
+          description: string;
+          content: string;
+          dataUrl?: string;
+          fileData?: string;
+          mimeType?: string;
+          uri: { type: "file"; value: string };
+        }
+      | undefined
+    ),
+  ];
 };
 
 export type ToWebviewFromIdeProtocol = ToWebviewFromIdeOrCoreProtocol & {

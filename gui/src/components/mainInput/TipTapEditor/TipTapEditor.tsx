@@ -9,15 +9,18 @@ import {
   useRef,
   useState,
 } from "react";
+import { v4 as uuidv4 } from "uuid";
 import { IdeMessengerContext } from "../../../context/IdeMessenger";
 import useIsOSREnabled from "../../../hooks/useIsOSREnabled";
 import useUpdatingRef from "../../../hooks/useUpdatingRef";
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
 import { selectSelectedChatModel } from "../../../redux/slices/configSlice";
+import { setNewestToolbarPreviewForInput } from "../../../redux/slices/sessionSlice";
 import InputToolbar, { ToolbarOptions } from "../InputToolbar";
 import { ComboBoxItem } from "../types";
 import { DragOverlay } from "./components/DragOverlay";
 import { InputBoxDiv } from "./components/StyledComponents";
+import { CodeBlock } from "./extensions";
 import { useMainEditor } from "./MainEditorProvider";
 import "./TipTapEditor.css";
 import { createEditorConfig, getPlaceholderText } from "./utils/editorConfig";
@@ -165,6 +168,61 @@ function TipTapEditorInner(props: TipTapEditorProps) {
     [editor],
   );
 
+  const handleAddFileFromComputer = useCallback(async () => {
+    const result = await ideMessenger.request("context/pickFile", undefined);
+    if (result.status === "error" || !result.content) {
+      return;
+    }
+    const item = result.content;
+    if (!editor) {
+      return;
+    }
+    if (item.dataUrl) {
+      const { schema } = editor.state;
+      const node = schema.nodes.image.create({ src: item.dataUrl });
+      editor.commands.command(({ tr }) => {
+        tr.insert(0, node);
+        return true;
+      });
+      setTimeout(() => {
+        editor.commands.blur();
+        editor.commands.focus("end");
+      }, 20);
+      return;
+    }
+    const contextItem = {
+      ...item,
+      id: {
+        providerTitle: "file",
+        itemId: uuidv4(),
+      },
+      ...(item.fileData && {
+        fileData: item.fileData,
+        mimeType: item.mimeType,
+      }),
+    };
+    editor
+      .chain()
+      .insertContentAt(0, {
+        type: CodeBlock.name,
+        attrs: {
+          item: contextItem,
+          inputId: props.inputId,
+        },
+      })
+      .run();
+    dispatch(
+      setNewestToolbarPreviewForInput({
+        inputId: props.inputId,
+        contextItemId: contextItem.id.itemId,
+      }),
+    );
+    setTimeout(() => {
+      editor.commands.blur();
+      editor.commands.focus("end");
+    }, 20);
+  }, [ideMessenger, editor, dispatch, props.inputId]);
+
   const { handleKeyUp, handleKeyDown } = useEditorEventHandlers({
     editor,
     isOSREnabled: isOSREnabled,
@@ -279,6 +337,7 @@ function TipTapEditorInner(props: TipTapEditorProps) {
           activeKey={activeKey}
           hidden={shouldHideToolbar && !props.isMainInput}
           onAddContextItem={() => insertCharacterWithWhitespace("@")}
+          onAddFileFromComputer={handleAddFileFromComputer}
           onEnter={onEnter}
           onImageFileSelected={(file) => {
             void handleImageFile(ideMessenger, file).then((result) => {

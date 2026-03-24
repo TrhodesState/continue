@@ -349,7 +349,16 @@ export type ImageMessagePart = {
   imageUrl: { url: string };
 };
 
-export type MessagePart = TextMessagePart | ImageMessagePart;
+export type FileMessagePart = {
+  type: "file";
+  file: {
+    fileData: string;
+    mimeType: string;
+    filename: string;
+  };
+};
+
+export type MessagePart = TextMessagePart | ImageMessagePart | FileMessagePart;
 
 export type MessageContent = string | MessagePart[];
 
@@ -466,6 +475,8 @@ export interface ContextItem {
   uri?: ContextItemUri;
   hidden?: boolean;
   status?: string;
+  fileData?: string;
+  mimeType?: string;
 }
 
 export interface ContextItemWithId extends ContextItem {

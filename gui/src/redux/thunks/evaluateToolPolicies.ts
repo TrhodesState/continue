@@ -4,7 +4,7 @@ import { IIdeMessenger } from "../../context/IdeMessenger";
 import { isEditTool } from "../../util/toolCallState";
 import { errorToolCall, updateToolCallOutput } from "../slices/sessionSlice";
 import { DEFAULT_TOOL_SETTING, ToolPolicies } from "../slices/uiSlice";
-import { AppThunkDispatch } from "../store";
+import { AppThunkDispatch, RootState } from "../store";
 
 interface EvaluatedPolicy {
   policy: ToolPolicy;
@@ -21,20 +21,27 @@ async function evaluateToolPolicy(
   activeTools: Tool[],
   toolCallState: ToolCallState,
   toolPolicies: ToolPolicies,
+  userExplicitToolPolicies: ToolPolicies,
 ): Promise<EvaluatedPolicy> {
   // allow edit tool calls without permission
   if (isEditTool(toolCallState.toolCall.function.name)) {
     return { policy: "allowedWithoutPermission", toolCallState };
   }
 
+  const toolName = toolCallState.toolCall.function.name;
+
+  // If the user has explicitly set a policy, respect it without running dynamic evaluation
+  const explicitPolicy = userExplicitToolPolicies[toolName];
+  if (explicitPolicy !== undefined) {
+    return { policy: explicitPolicy, toolCallState };
+  }
+
   const basePolicy =
-    toolPolicies[toolCallState.toolCall.function.name] ??
-    activeTools.find(
-      (tool) => tool.function.name === toolCallState.toolCall.function.name,
-    )?.defaultToolPolicy ??
+    toolPolicies[toolName] ??
+    activeTools.find((tool) => tool.function.name === toolName)
+      ?.defaultToolPolicy ??
     DEFAULT_TOOL_SETTING;
 
-  const toolName = toolCallState.toolCall.function.name;
   const result = await ideMessenger.request("tools/evaluatePolicy", {
     toolName,
     basePolicy,
@@ -77,6 +84,7 @@ export async function evaluateToolPolicies(
   activeTools: Tool[],
   generatedToolCalls: ToolCallState[],
   toolPolicies: ToolPolicies,
+  userExplicitToolPolicies: ToolPolicies = {},
 ): Promise<EvaluatedPolicy[]> {
   // Check if ALL tool calls are auto-approved using dynamic evaluation
   const policyResults = await Promise.all(
@@ -86,6 +94,7 @@ export async function evaluateToolPolicies(
         activeTools,
         toolCallState,
         toolPolicies,
+        userExplicitToolPolicies,
       ),
     ),
   );

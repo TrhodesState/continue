@@ -185,6 +185,15 @@ export function toChatMessage(
                 },
               };
             }
+            if (part.type === "file") {
+              return {
+                type: "file" as const,
+                file: {
+                  file_data: `data:${part.file.mimeType};base64,${part.file.fileData}`,
+                  filename: part.file.filename,
+                },
+              };
+            }
             return part;
           })
         : message.content
@@ -589,6 +598,12 @@ function toResponseInputContentList(
         image_url: part.imageUrl.url,
         detail: "auto",
       });
+    } else if (part.type === "file") {
+      list.push({
+        type: "input_file",
+        file_data: `data:${part.file.mimeType};base64,${part.file.fileData}`,
+        filename: part.file.filename,
+      } as any);
     }
   }
   return list;

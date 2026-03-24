@@ -1,5 +1,6 @@
 import { useAppDispatch, useAppSelector } from "../../../../redux/hooks";
 import { selectPendingToolCalls } from "../../../../redux/selectors/selectToolCalls";
+import { setToolPolicy } from "../../../../redux/slices/uiSlice";
 import { callToolById } from "../../../../redux/thunks/callToolById";
 import { cancelToolCallThunk } from "../../../../redux/thunks/cancelToolCall";
 import { getAltKeyLabel, getMetaKeyLabel, isJetBrains } from "../../../../util";
@@ -24,6 +25,11 @@ export function PendingToolCallToolbar() {
   }
 
   const handleAccept = (toolCallId: string) => {
+    void dispatch(callToolById({ toolCallId }));
+  };
+
+  const handleAlwaysAllow = (toolCallId: string, toolName: string) => {
+    dispatch(setToolPolicy({ toolName, policy: "allowedWithoutPermission" }));
     void dispatch(callToolById({ toolCallId }));
   };
 
@@ -64,6 +70,20 @@ export function PendingToolCallToolbar() {
                 </span>
               )}
               <span>Reject</span>
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-description-muted my-1 font-medium"
+              onClick={() =>
+                handleAlwaysAllow(
+                  toolCall.toolCallId,
+                  toolCall.toolCall.function.name,
+                )
+              }
+            >
+              <span>Always allow</span>
             </Button>
 
             <Button

@@ -435,6 +435,77 @@ export class VsCodeMessenger {
       }
     });
 
+    this.onWebview("context/pickFile", async (msg) => {
+      const uris = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        canSelectFiles: true,
+      });
+
+      if (!uris || uris.length === 0) {
+        return undefined;
+      }
+
+      const uri = uris[0];
+      const filePath = uri.fsPath;
+      const name = filePath.split(/[\\/]/).pop() ?? filePath;
+      const ext = name.split(".").pop()?.toLowerCase() ?? "";
+      const imageMimeTypes: Record<string, string> = {
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        png: "image/png",
+        gif: "image/gif",
+        webp: "image/webp",
+        svg: "image/svg+xml",
+      };
+
+      const fileMimeTypes: Record<string, string> = {
+        pdf: "application/pdf",
+      };
+
+      const bytes = await vscode.workspace.fs.readFile(uri);
+
+      if (imageMimeTypes[ext]) {
+        const base64 = Buffer.from(bytes).toString("base64");
+        const dataUrl = `data:${imageMimeTypes[ext]};base64,${base64}`;
+        return {
+          name,
+          description: filePath,
+          content: "",
+          dataUrl,
+          uri: { type: "file" as const, value: filePath },
+        };
+      }
+
+      if (fileMimeTypes[ext]) {
+        const fileData = Buffer.from(bytes).toString("base64");
+        return {
+          name,
+          description: filePath,
+          content: "",
+          fileData,
+          mimeType: fileMimeTypes[ext],
+          uri: { type: "file" as const, value: filePath },
+        };
+      }
+
+      let content: string;
+      try {
+        content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch {
+        vscode.window.showErrorMessage(
+          `Cannot attach "${filePath}": file appears to be binary.`,
+        );
+        return undefined;
+      }
+
+      return {
+        name,
+        description: filePath,
+        content,
+        uri: { type: "file" as const, value: filePath },
+      };
+    });
+
     this.onWebview("openAgentLocally", async (msg) => {
       const configHandler = await configHandlerPromise;
       const { agentSessionId } = msg.data;

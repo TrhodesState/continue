@@ -1,6 +1,7 @@
 import {
   AtSymbolIcon,
   LightBulbIcon as LightBulbIconOutline,
+  PaperClipIcon,
   PhotoIcon,
 } from "@heroicons/react/24/outline";
 import { LightBulbIcon as LightBulbIconSolid } from "@heroicons/react/24/solid";
@@ -39,6 +40,7 @@ interface InputToolbarProps {
   onAddContextItem?: () => void;
   onClick?: () => void;
   onImageFileSelected?: (file: File) => void;
+  onAddFileFromComputer?: () => void;
   hidden?: boolean;
   activeKey: string | null;
   toolbarOptions?: ToolbarOptions;
@@ -135,6 +137,11 @@ function InputToolbar(props: InputToolbarProps) {
                 </HoverItem>
               </ToolTip>
             )}
+            <ToolTip place="top" content="Add file from computer">
+              <HoverItem onClick={props.onAddFileFromComputer}>
+                <PaperClipIcon className="h-3 w-3 hover:brightness-125" />
+              </HoverItem>
+            </ToolTip>
             {supportsReasoning && (
               <HoverItem
                 onClick={() => {

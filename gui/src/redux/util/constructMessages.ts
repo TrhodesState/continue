@@ -2,6 +2,7 @@ import {
   ChatHistoryItem,
   ChatMessage,
   ContextItemWithId,
+  FileMessagePart,
   RuleMetadata,
   RuleWithSource,
   TextMessagePart,
@@ -81,13 +82,24 @@ export function constructMessages(
       let content = normalizeToMessageParts(item.message);
 
       const ctxItemParts = item.contextItems
-        .map((ctxItem) => {
-          return {
-            type: "text",
-            text: `${ctxItem.content}\n`,
-          } as TextMessagePart;
+        .map((ctxItem): TextMessagePart | FileMessagePart | null => {
+          if (ctxItem.fileData && ctxItem.mimeType) {
+            return {
+              type: "file",
+              file: {
+                fileData: ctxItem.fileData,
+                mimeType: ctxItem.mimeType,
+                filename: ctxItem.name,
+              },
+            } as FileMessagePart;
+          }
+          const text = `${ctxItem.content}\n`;
+          if (!text.trim()) return null;
+          return { type: "text", text } as TextMessagePart;
         })
-        .filter((part) => !!part.text.trim());
+        .filter(
+          (part): part is TextMessagePart | FileMessagePart => part !== null,
+        );
 
       content = [...ctxItemParts, ...content];
       msgs.push({
