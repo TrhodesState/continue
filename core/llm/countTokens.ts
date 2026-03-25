@@ -102,6 +102,9 @@ async function countTokensAsync(
       if (part.type === "imageUrl") {
         return countImageTokens(part);
       }
+      if (part.type === "file") {
+        return 0;
+      }
       return (await encoding.encode(part.text ?? "")).length;
     });
     return (await Promise.all(promises)).reduce((sum, val) => sum + val, 0);

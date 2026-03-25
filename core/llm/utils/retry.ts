@@ -73,6 +73,16 @@ function defaultShouldRetry(error: any, attempt: number): boolean {
     return true;
   }
 
+  const errorMessage = error.message?.toLowerCase?.() ?? "";
+  if (
+    errorMessage.includes("too many requests") ||
+    errorMessage.includes("rate limit") ||
+    errorMessage.includes("rate limited") ||
+    errorMessage.includes("resource exhausted")
+  ) {
+    return true;
+  }
+
   // HTTP status codes
   if (error.status || error.statusCode) {
     const status = error.status || error.statusCode;

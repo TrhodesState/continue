@@ -530,6 +530,22 @@ describe("errorAnalysis", () => {
         expect(result.parsedError).toBe("Request timeout");
         expect(result.statusCode).toBe(undefined);
       });
+
+      it("should infer 429 from streamed rate limit text when status is missing", () => {
+        const error = new Error("Error streaming response: Too Many Requests");
+        const result = analyzeError(error, null);
+
+        expect(result.statusCode).toBe(429);
+      });
+
+      it("should prefer direct status metadata when present on the error object", () => {
+        const error = new Error("Error streaming response");
+        (error as any).status = 429;
+
+        const result = analyzeError(error, null);
+
+        expect(result.statusCode).toBe(429);
+      });
     });
   });
 });

@@ -7,6 +7,139 @@ export async function* toAsyncIterable(
   }
 }
 
+function toNumericStatus(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+
+    const numericValue = Number(trimmed);
+    if (Number.isFinite(numericValue)) {
+      return numericValue;
+    }
+  }
+
+  return undefined;
+}
+
+function extractStreamErrorStatus(errorData: unknown): number | undefined {
+  if (!errorData || typeof errorData !== "object") {
+    return undefined;
+  }
+
+  const candidates = [
+    (errorData as any).status,
+    (errorData as any).statusCode,
+    (errorData as any).status_code,
+    (errorData as any).code,
+  ];
+
+  for (const candidate of candidates) {
+    const status = toNumericStatus(candidate);
+    if (status !== undefined && status >= 100 && status < 600) {
+      return status;
+    }
+  }
+
+  const message =
+    typeof (errorData as any).message === "string"
+      ? (errorData as any).message.toLowerCase()
+      : "";
+
+  if (
+    message.includes("too many requests") ||
+    message.includes("rate limit") ||
+    message.includes("rate limited")
+  ) {
+    return 429;
+  }
+
+  return undefined;
+}
+
+function extractRetryAfter(errorData: unknown): string | undefined {
+  if (!errorData || typeof errorData !== "object") {
+    return undefined;
+  }
+
+  const headers = (errorData as any).headers;
+  const candidates = [
+    (errorData as any).retry_after,
+    (errorData as any).retryAfter,
+    (errorData as any).retryAfterSeconds,
+    headers?.["retry-after"],
+    headers?.["Retry-After"],
+  ];
+
+  for (const candidate of candidates) {
+    if (
+      typeof candidate === "number" &&
+      Number.isFinite(candidate) &&
+      candidate >= 0
+    ) {
+      return String(candidate);
+    }
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function createStreamError(errorData: unknown): Error {
+  if (
+    errorData &&
+    typeof errorData === "object" &&
+    "message" in errorData &&
+    typeof (errorData as any).message === "string"
+  ) {
+    const status = extractStreamErrorStatus(errorData);
+    const serializedError = JSON.stringify({ error: errorData });
+    const message = (errorData as any).message;
+    const error = new Error(
+      status
+        ? `HTTP ${status} ${message}\n\n${serializedError}`
+        : `Error streaming response: ${message}`,
+    );
+
+    if (status !== undefined) {
+      (error as any).status = status;
+      (error as any).statusCode = status;
+    }
+
+    const retryAfter = extractRetryAfter(errorData);
+    if (retryAfter) {
+      (error as any).headers = {
+        "retry-after": retryAfter,
+      };
+    }
+
+    if (typeof (errorData as any).type === "string") {
+      (error as any).type = (errorData as any).type;
+    }
+
+    if (typeof (errorData as any).code !== "undefined") {
+      (error as any).code = (errorData as any).code;
+    }
+
+    (error as any).isStreamError = true;
+
+    return error;
+  }
+
+  const error = new Error(
+    `Error streaming response: ${JSON.stringify(errorData)}`,
+  );
+  (error as any).isStreamError = true;
+  return error;
+}
+
 export async function* streamResponse(
   response: Response,
 ): AsyncGenerator<string> {
@@ -81,26 +214,14 @@ export function parseDataLine(line: string): any {
   try {
     const data = JSON.parse(json);
     if (data.error) {
-      if (
-        data.error &&
-        typeof data.error === "object" &&
-        "message" in data.error
-      ) {
-        console.error("Error in streamed response:", data.error);
-        throw new Error(`Error streaming response: ${data.error.message}`);
-      }
-      throw new Error(
-        `Error streaming response: ${JSON.stringify(data.error)}`,
-      );
+      console.error("Error in streamed response:", data.error);
+      throw createStreamError(data.error);
     }
 
     return data;
   } catch (e) {
     // If the error was thrown by our error check, rethrow it
-    if (
-      e instanceof Error &&
-      e.message.startsWith("Error streaming response:")
-    ) {
+    if (e instanceof Error && (e as any).isStreamError) {
       throw e;
     }
     // Otherwise it's a JSON parsing error

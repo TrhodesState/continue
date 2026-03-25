@@ -12,6 +12,7 @@ import {
   LlmApiRequestType,
   toChatBody,
 } from "../openaiTypeConverters.js";
+import { withLLMRetry } from "../utils/retry.js";
 
 const NON_CHAT_MODELS = [
   "text-davinci-002",
@@ -300,6 +301,7 @@ class OpenAI extends BaseLLM {
     }
   }
 
+  @withLLMRetry()
   protected async *_streamChat(
     messages: ChatMessage[],
     signal: AbortSignal,

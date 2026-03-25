@@ -33,6 +33,19 @@ function parseErrorMessage(fullErrMsg: string): string {
   }
 }
 
+function isRateLimitMessage(message?: string): boolean {
+  if (!message) {
+    return false;
+  }
+
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("too many requests") ||
+    lower.includes("rate limit") ||
+    lower.includes("rate limited")
+  );
+}
+
 export function analyzeError(
   error: unknown,
   selectedModel: any,
@@ -95,6 +108,27 @@ export function analyzeError(
         }
       }
     }
+  }
+
+  if (
+    statusCode === undefined &&
+    error &&
+    typeof error === "object" &&
+    ("status" in error || "statusCode" in error)
+  ) {
+    const directStatus = Number(
+      (error as any).status ?? (error as any).statusCode,
+    );
+    if (!Number.isNaN(directStatus)) {
+      statusCode = directStatus;
+    }
+  }
+
+  if (
+    statusCode === undefined &&
+    (isRateLimitMessage(message) || isRateLimitMessage(parsedError))
+  ) {
+    statusCode = 429;
   }
 
   return {

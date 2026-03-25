@@ -97,6 +97,22 @@ describe("parseDataLine", () => {
     );
   });
 
+  test("parseDataLine should preserve status and retry metadata for rate limit errors", () => {
+    const line =
+      'data: {"error":{"message":"Too Many Requests","code":429,"retry_after":60}}';
+
+    try {
+      parseDataLine(line);
+      expect.fail("Expected parseDataLine to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("HTTP 429 Too Many Requests");
+      expect((error as any).status).toBe(429);
+      expect((error as any).statusCode).toBe(429);
+      expect((error as any).headers).toEqual({ "retry-after": "60" });
+    }
+  });
+
   test("parseDataLine should handle empty objects", () => {
     const line = "data: {}";
     const result = parseDataLine(line);

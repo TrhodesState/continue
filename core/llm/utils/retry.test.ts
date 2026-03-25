@@ -134,6 +134,22 @@ describe("Retry Functionality", () => {
       expect(mockFn).toHaveBeenCalledTimes(2);
     });
 
+    it("should retry on plain rate limit language when status metadata is missing", async () => {
+      const error = new Error("Error streaming response: Too Many Requests");
+      const mockFn = jest
+        .fn()
+        .mockRejectedValueOnce(error)
+        .mockResolvedValue("success");
+
+      const result = await retryAsync(mockFn, {
+        maxAttempts: 2,
+        baseDelay: 10,
+      });
+
+      expect(result).toBe("success");
+      expect(mockFn).toHaveBeenCalledTimes(2);
+    });
+
     it("should handle HTTP 5xx errors", async () => {
       const error = new Error("Internal Server Error");
       (error as any).status = 500;

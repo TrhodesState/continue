@@ -148,9 +148,11 @@ const StreamErrorDialog = ({ error }: StreamErrorProps) => {
           {`This might mean your ${modelTitle} usage has been rate limited
                 by ${providerName}.`}
         </span>
+        <span>{`Wait a moment and try again. If this keeps happening, check your provider quota and model configuration.`}</span>
         <div className="flex flex-row flex-wrap justify-start gap-3 py-4">
           {checkKeysButton}
           {configButton}
+          {resubmitButton}
         </div>
       </div>
     );
