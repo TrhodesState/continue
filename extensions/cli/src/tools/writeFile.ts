@@ -51,8 +51,17 @@ export const writeFileTool: Tool = {
   preprocess: async (args) => {
     const filepath = args?.filepath;
     const content = args?.content ?? "";
+    if (filepath === undefined || filepath === null) {
+      throw new ContinueError(
+        ContinueErrorReason.FileWriteError,
+        `Write tool requires a 'filepath' argument (absolute or relative path to the target file). Please retry with the filepath included.`,
+      );
+    }
     if (typeof filepath !== "string") {
-      throw new Error("Filepath must be a string");
+      throw new ContinueError(
+        ContinueErrorReason.FileWriteError,
+        `Write tool 'filepath' must be a string path (e.g. "/path/to/file.md"). Got: ${JSON.stringify(filepath)}`,
+      );
     }
     if (typeof content !== "string") {
       throw new Error("New file content must be a string");

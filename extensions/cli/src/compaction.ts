@@ -17,7 +17,7 @@ import {
 
 // Buffer cap/ratio for auto-compaction threshold calculation
 export const AUTO_COMPACT_BUFFER_CAP = 15_000;
-export const AUTO_COMPACT_BUFFER_RATIO = 0.8;
+export const AUTO_COMPACT_BUFFER_RATIO = 0.7;
 
 export interface CompactionResult {
   compactedHistory: ChatHistoryItem[];

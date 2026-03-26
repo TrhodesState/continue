@@ -18,6 +18,7 @@ import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
 import { selectSelectedProfile } from "../../redux/slices/profilesSlice";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
+import { continueInterruptedStreamThunk } from "../../redux/thunks/continueInterruptedStream";
 import { streamResponseThunk } from "../../redux/thunks/streamResponse";
 import { isLocalProfile } from "../../util";
 import { analyzeError } from "../../util/errorAnalysis";
@@ -82,6 +83,20 @@ const StreamErrorDialog = ({ error }: StreamErrorProps) => {
     <GhostButton
       className="flex items-center"
       onClick={() => {
+        dispatch(setShowDialog(false));
+        dispatch(setDialogMessage(undefined));
+
+        const lastItem = history.at(-1);
+        const hasPartialResponse =
+          lastItem?.message.role === "assistant" && !!lastItem.message.content;
+
+        if (hasPartialResponse) {
+          // True resume: continue generating from where the stream was cut off.
+          void dispatch(continueInterruptedStreamThunk());
+          return;
+        }
+
+        // Fallback: no partial content, resubmit the last user message.
         let index = -1;
         for (let i = history.length - 1; i >= 0; i--) {
           if (
@@ -111,12 +126,10 @@ const StreamErrorDialog = ({ error }: StreamErrorProps) => {
             index: index === -1 ? 0 : index,
           }),
         );
-        dispatch(setShowDialog(false));
-        dispatch(setDialogMessage(undefined));
       }}
     >
       <ArrowPathIcon className="mr-1.5 h-3.5 w-3.5" />
-      <span>Resubmit last message</span>
+      <span>Resume</span>
     </GhostButton>
   );
 

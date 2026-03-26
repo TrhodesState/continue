@@ -295,6 +295,7 @@ type SessionState = {
   contextPercentage?: number;
   inlineErrorMessage?: InlineErrorMessageType;
   compactionLoading: Record<number, boolean>; // Track compaction loading by message index
+  interrupted?: boolean; // true if the last stream was interrupted by an error
 };
 
 export const INITIAL_SESSION_STATE: SessionState = {
@@ -757,9 +758,10 @@ export const sessionSlice = createSlice({
       state.isStreaming = false;
       state.symbols = {};
 
-      state.inlineErrorMessage = undefined;
       state.isPruned = false;
       state.contextPercentage = undefined;
+      state.interrupted = false;
+      state.inlineErrorMessage = undefined;
 
       if (payload) {
         state.history = payload.history as any;
@@ -767,6 +769,10 @@ export const sessionSlice = createSlice({
         state.id = payload.sessionId;
         if (payload.mode) {
           state.mode = payload.mode;
+        }
+        if (payload.interrupted) {
+          state.interrupted = true;
+          state.inlineErrorMessage = "interrupted";
         }
       } else {
         state.history = [];
@@ -1068,6 +1074,14 @@ export const sessionSlice = createSlice({
     setContextPercentage: (state, action: PayloadAction<number>) => {
       state.contextPercentage = action.payload;
     },
+    setInterrupted: (state, action: PayloadAction<boolean>) => {
+      state.interrupted = action.payload;
+      if (action.payload) {
+        state.inlineErrorMessage = "interrupted";
+      } else if (state.inlineErrorMessage === "interrupted") {
+        state.inlineErrorMessage = undefined;
+      }
+    },
   },
   selectors: {
     selectIsGatheringContext: (state) => {
@@ -1156,6 +1170,7 @@ export const {
   setInlineErrorMessage,
   setIsPruned,
   setContextPercentage,
+  setInterrupted,
   setCompactionLoading,
 } = sessionSlice.actions;
 

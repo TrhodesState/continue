@@ -287,6 +287,8 @@ export interface Session {
   chatModelTitle?: string | null;
   /** Optional: cumulative usage and cost for all LLM API calls in this session */
   usage?: SessionUsage;
+  /** Optional: true if the session was interrupted by a stream error and can be resumed */
+  interrupted?: boolean;
 }
 
 export interface BaseSessionMetadata {
